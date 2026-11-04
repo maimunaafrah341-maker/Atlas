@@ -1,0 +1,67 @@
+# Project Atlas — Architecture Decision Record
+
+Format: decision · why · alternatives rejected. Status: **Accepted** (revision 2, 2026-11-04) unless marked otherwise.
+
+### ADR-001 Modular monolith
+One FastAPI app with internal domain packages and one deploy unit. **Why:** a small team on a hackathon timeline; the transactional consistency we need (order + stock + outbox in one transaction) is trivial in one process. **Rejected:** microservices (distributed transactions with no benefit at this scale); serverless functions (cold starts, no shared transactions, harder webhook handling).
+
+### ADR-002 Managed PostgreSQL when deployed, SQLite locally (revised)
+The deployed database is a **free managed PostgreSQL** instance (Neon free tier). Local development and the fast test suite can use SQLite. The app **refuses to start in production with SQLite**. Access goes through SQLAlchemy 2 (sync) with the psycopg 3 driver, and migrations go through Alembic. CI runs the backend tests against both databases. **Why:** the Render free web service has an ephemeral filesystem and no persistent disk, and the user has ruled out paid plans. An external managed database survives restarts, redeploys and sleep. Neon's free tier doesn't expire; it suspends idle compute, which we handle with `pool_pre_ping`. **Rejected:** a Render persistent disk (requires a paid plan); Render free PostgreSQL (time-limited free instances); Supabase free (inactive projects are paused); SQLite on the Render free filesystem (data lost on every deploy or restart); PostgreSQL only, including locally (Docker isn't available on the dev machine, and SQLite keeps local tests fast; the CI matrix covers drift).
+
+### ADR-003 Money as integer minor units; USD is the single store currency (revised)
+Every price, total and PayPal amount is in **USD**, stored as cents. The UI formats amounts with `Intl.NumberFormat` in the user's locale but never converts them. **Why:** what PayPal charges must be exactly what was shown; USD works for an international Sandbox buyer; one currency removes a class of mismatch bugs. **Rejected:** live FX display (a guessed price); per-currency price lists (out of scope, although the `currency` column keeps the option open); EUR or BRL as the store currency; INR (see ADR-019).
+
+### ADR-004 "AI proposes, backend decides" pipeline
+Extract intent (validated JSON) → deterministic services → LLM composes text from structured, placeholder-protected results → validators. Prices and stock reach the UI only through structured fields. **Why:** this makes "no AI-generated prices, stock, payment state or order IDs" a structural guarantee that tests can check, instead of a prompt request. **Rejected:** a free-form agent with tool calls that mutate state (hard to bound, prompt-injection risk); letting the LLM write prices in prose (unverifiable).
+
+### ADR-005 Provider-agnostic LLM runtime; Gemini 3.8 Flash initially (revised)
+A `LLMProvider` protocol with `generate_structured(messages, schema)` and `generate_text(messages)`. The first adapter is **Gemini**, with **`gemini-3.8-flash`** as the default model. Provider and model come from env (`LLM_PROVIDER`, `LLM_MODEL`, `GEMINI_API_KEY`), so changing either needs no code change. A deterministic fake adapter serves tests and offline development. The vendor SDK is imported only inside its adapter. **Why:** a locked requirement; CI stays independent of the network and of cost; the audit found that vendor coupling in domain code was the main problem in Raahat and Athena. **Rejected:** LangChain-style frameworks (a heavy abstraction for two calls per turn); a hard-coded multi-vendor fallback chain (Athena's pattern); calling the SDK from domain code.
+
+### ADR-006 Full-text retrieval behind one interface; semantic deferred (revised)
+A `KnowledgeIndex` interface with two implementations:
+- **PostgreSQL** (deployed): a `tsvector` column with a GIN index. Each chunk uses its language's built-in text-search configuration (`english`, `spanish`, `french`, `german`, `portuguese`), queried with `websearch_to_tsquery` and ranked with `ts_rank_cd`.
+- **SQLite FTS5** (local and tests): tokenizer `unicode61 remove_diacritics 2`.
+
+Both implementations must pass the same retrieval contract tests and evaluation set. When the target language has no documents, the query is translated to the merchant's source language. **Why:** the corpus is small and keyword-heavy. PostgreSQL's per-language stemming is a real advantage for es/fr/de/pt. No new infrastructure is needed. **Rejected:** a vector database or `pgvector` embeddings (not justified until the evaluation set shows recall failures); FTS5 only (not available in PostgreSQL); stuffing the whole corpus into the prompt.
+
+### ADR-007 PayPal Orders v2: server-side create and capture, JS SDK for payer approval
+`createOrder` and `onApprove` call our backend, and the backend calls PayPal with `PayPal-Request-Id`. Payment is confirmed by the capture response, and signature-verified webhooks reconcile it. **Why:** the server controls amounts, so the client can't tamper with them; capture is idempotent; webhooks cover async or pending cases. **Rejected:** client-side `actions.order.capture()` (the browser becomes a payment authority); webhook-only confirmation (slow, and fragile while a free instance is waking); other gateways.
+
+### ADR-008 Explicit approval through a versioned order snapshot
+"Review" creates an immutable snapshot with a `version_hash`. Approval must present that hash, and PayPal order creation is allowed only from `approved`. Changing the presentation language doesn't alter the snapshot or its hash. **Rejected:** approval through a chat message (ambiguous, injectable); recomputing totals at capture time.
+
+### ADR-009 Inventory: reserve at approval, commit at capture, release on expiry or failure
+**Why:** prevents overselling between approval and capture without locking stock for browsing carts. **Rejected:** decrementing at add-to-cart; decrementing only at capture. A residual conflict, where a capture completes after the reservation expired and stock is gone, becomes an exception and is never handled silently.
+
+### ADR-010 Make via a database-backed transactional outbox (revised)
+Events are written in the same transaction as the state change. The dispatcher claims them with a crash-safe lease (a conditional `UPDATE`, which works on both databases). Delivery carries an HMAC signature, an API key and a stable `event_id` as the idempotency key. Retries use exponential backoff with jitter, up to `max_attempts`. Events that exhaust their attempts become `dead` and raise an exception. The dashboard shows every attempt and offers manual retry. On startup the dispatcher resumes pending events and events whose lease expired. Delivery is at-least-once; the Make Data Store dedup on `event_id` makes the effect exactly-once. Make callbacks are informational and append-only. **Why:** Make downtime, a crash or free-tier sleep never loses an event or affects checkout. **Rejected:** synchronous Make calls in the request path; Make as a store of state; a Redis or Celery queue (infrastructure without a measured need); an in-memory queue (lost on restart).
+
+### ADR-011 Language, locale, currency and destination are separate fields
+**Why:** a Portuguese speaker in Germany shipping to France and paying in USD is a normal customer. **Rejected:** deriving any one of these from another.
+
+### ADR-012 Single Render free web service, Docker runtime (revised)
+A multi-stage Dockerfile builds the Vite app with Node, then runs FastAPI on Python 3.11, serving `/api/*` and the SPA from one origin. `scripts/start.sh` runs `alembic upgrade head` before uvicorn. `render.yaml` declares `plan: free`. **Why:** same origin (no CORS, simple cookies); one stable URL for PayPal webhooks; a reproducible build that CI can test without Render; no paid features required. **Rejected:** a separate static site plus API (CORS and cookies); Render's native Python runtime (Node availability for the SPA build is less predictable); pre-deploy commands (not relied upon on the free plan); any paid Render plan (excluded by the user).
+
+### ADR-013 Merchant auth: single admin credential from env
+**Why:** single-merchant scope; this is honest about being a hackathon-grade control. **Rejected:** OAuth or an identity provider. Documented as a production gap.
+
+### ADR-014 In-process background workers, state in the database
+Asyncio loops are started in the FastAPI lifespan: outbox dispatcher and reservation expiry. All their state lives in the database, so a restart loses nothing (ADR-010). Reservation expiry also runs lazily on reads, so expired reservations don't keep holding stock while the instance is asleep. **Rejected:** Celery or RQ with Redis.
+
+### ADR-015 Catalogue and knowledge translations are stored, not generated live
+Translations live in `product_translations` and per-language knowledge docs. A seed-time script may draft them with the LLM. Those drafts are flagged `machine_translated`, pass placeholder validation (ADR-018) and are committed for review. **Rejected:** translating catalogue text live on every request.
+
+### ADR-016 Existing multilingual codebases: audited, patterns adapted
+Audit complete ([MULTILINGUAL_REUSE_AUDIT.md](MULTILINGUAL_REUSE_AUDIT.md)). No domain code is ported. Patterns that are adapted: immutable original text, the translation preservation check, closed-enum extraction, a language preference with safe storage, and translation-table integrity tests. Generic helpers from the MIT-licensed Second Look may be reused with attribution. **Rejected:** script-based detection, the existing dictionaries, Athena's embedding/OCR/voice stack.
+
+### ADR-017 Language detection and resolution policy (new)
+Detection is statistical character n-gram language identification restricted to `en/es/fr/de/pt`, run on text with URLs, SKUs, numbers and emoji removed. It returns `undetermined` for short or low-confidence input. There is **no alphabet or script-based detection** for these languages. Resolution precedence: **explicit user selection > conversation language > confident detected switch > UI locale > en**. A switch needs a confidence threshold and a minimum word count, both tuned on the Atlas evaluation set. Manual switching is always available, and Auto restores detection. Every decision is recorded with its source. **Why:** all five initial languages share the Latin script; short replies and product names must not flip the conversation; a user's explicit choice must be respected. **Rejected:** script heuristics; keyword lists; LLM-only detection (adds latency and isn't deterministic, although the model's reported language may be logged for evaluation); per-message switching with no stickiness.
+
+### ADR-018 Protected-placeholder validation (new)
+Product IDs, SKUs, sizes, quantities, URLs, numeric values and monetary amounts are replaced with typed tokens before any model composition or translation. The output must keep a valid token set: equal to the input's for translation, a subset for composition, with no invented tokens. After the tokens are removed, it must contain no digits, currency markers, URLs or SKU-shaped strings. Values are substituted only at render time from structured data. Failure leads to one retry, then a template reply. **Why:** generalises Raahat's `_preserved()` check into a guarantee that translation can't alter commercial or payment data, in any number format. **Rejected:** regex checks on numbers in the final text (fail on European formats such as `1.299,00`); trusting prompt instructions alone.
+
+### ADR-019 PayPal demonstration scope (new)
+The demo uses **PayPal Sandbox only**: a Sandbox business (merchant) account and a Sandbox personal account acting as an **international buyer**, checking out in **USD**. We make no claim about domestic Indian PayPal payments, INR checkout or live payments. **Why:** PayPal's support for domestic payments between Indian accounts is restricted, and the product targets cross-border sellers. Stating the scope prevents an overclaim during judging. **Rejected:** INR pricing; presenting Sandbox as production readiness.
+
+### ADR-020 Make connected apps: Google Sheets, Gmail, Telegram (new)
+Sheets is the order, stock and exception log. Gmail sends customer confirmation emails. Telegram, via a bot, carries merchant alerts. Everything runs through one webhook-triggered scenario with a router by event type. **Why:** all three are free to use, quick to show in a demo, and cover the merchant-log, customer and merchant-alert channels. One scenario stays within Free-plan limits. **Rejected:** Slack and SMTP (excluded by the user); one scenario per event type (uses more of the active-scenario allowance and needs more webhook URLs to manage).

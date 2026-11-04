@@ -1,0 +1,21 @@
+# Render Blueprint for Project Atlas: one FREE Docker web service.
+# Persistence is an external free managed PostgreSQL (Neon). No disk, no paid plan.
+# When the Blueprint is created, Render prompts for every `sync: false` value.
+services:
+  - type: web
+    name: atlas
+    runtime: docker
+    plan: free
+    region: oregon   # same region as the Neon database (AWS us-west-2)
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # Neon connection string, e.g. postgresql://user:pass@ep-xxx.neon.tech/atlas?sslmode=require
+      - key: DATABASE_URL
+        sync: false

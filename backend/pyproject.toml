@@ -1,0 +1,47 @@
+[project]
+name = "atlas-backend"
+version = "0.1.0"
+description = "Project Atlas: multilingual AI commerce copilot (backend)"
+requires-python = ">=3.11,<3.12"
+# Exact, tested pins live in requirements.txt / requirements-dev.txt.
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "pydantic-settings",
+  "sqlalchemy>=2.0",
+  "alembic",
+  "psycopg[binary]>=3.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx", "ruff", "mypy"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "N", "C4", "PT"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+known-third-party = ["alembic"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["app"]
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "postgres: requires TEST_DATABASE_URL pointing at PostgreSQL",
+]
+filterwarnings = ["error::DeprecationWarning:app.*"]
