@@ -16,6 +16,11 @@ services:
         value: production
       - key: LOG_LEVEL
         value: INFO
+      - key: STORE_CURRENCY
+        value: USD
+      # ADR-022: create-only, idempotent demo seed after migrations. Never deletes rows or overwrites stock.
+      - key: SEED_CATALOG_ON_START
+        value: "1"
       # Neon connection string, e.g. postgresql://user:pass@ep-xxx.neon.tech/atlas?sslmode=require
       - key: DATABASE_URL
         sync: false

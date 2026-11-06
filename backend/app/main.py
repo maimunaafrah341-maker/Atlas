@@ -11,9 +11,10 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import health
+from app.api import catalog, health, shipping
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
+from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.headers.setdefault(header, value)
         return response
 
+    install_error_handlers(app)
     app.include_router(health.router)
+    app.include_router(catalog.router)
+    app.include_router(shipping.router)
 
     dist = settings.frontend_dist_dir
     if dist is not None and (dist / "index.html").is_file():

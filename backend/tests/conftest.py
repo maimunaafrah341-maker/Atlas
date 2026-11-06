@@ -15,11 +15,13 @@ import pytest
 from alembic import command
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.config import Environment, Settings, normalize_database_url
 from app.db import create_db_engine
 from app.main import create_app
 from app.migrations import alembic_config
+from app.seed import seed_database
 
 TEST_DATABASE_URL = normalize_database_url(os.environ.get("TEST_DATABASE_URL", "").strip())
 
@@ -64,4 +66,36 @@ def make_settings(database_url: str, **overrides: object) -> Settings:
 @pytest.fixture
 def client(migrated_database_url: str) -> Iterator[TestClient]:
     with TestClient(create_app(make_settings(migrated_database_url))) as test_client:
+        yield test_client
+
+
+def open_session(url: str) -> Iterator[Session]:
+    engine = create_db_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def db_session(migrated_database_url: str) -> Iterator[Session]:
+    """A session on an empty, fully migrated database."""
+    yield from open_session(migrated_database_url)
+
+
+@pytest.fixture
+def seeded_url(migrated_database_url: str) -> str:
+    seed_database(migrated_database_url)
+    return migrated_database_url
+
+
+@pytest.fixture
+def seeded_session(seeded_url: str) -> Iterator[Session]:
+    yield from open_session(seeded_url)
+
+
+@pytest.fixture
+def seeded_client(seeded_url: str) -> Iterator[TestClient]:
+    with TestClient(create_app(make_settings(seeded_url))) as test_client:
         yield test_client

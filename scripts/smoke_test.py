@@ -36,6 +36,13 @@ class Result:
     def json(self) -> Any:
         return json.loads(self.body)
 
+    def json_or_empty(self) -> dict[str, Any]:
+        try:
+            value = self.json()
+        except ValueError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
 
 def fetch(url: str, timeout: float) -> Result:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})  # noqa: S310
@@ -69,6 +76,9 @@ def main() -> int:
     parser.add_argument("--expect-dialect", choices=["sqlite", "postgresql"])
     parser.add_argument("--wake-timeout", type=float, default=120)
     parser.add_argument("--no-frontend", action="store_true", help="skip SPA checks (API-only instance)")
+    parser.add_argument(
+        "--skip-catalog", action="store_true", help="skip catalogue/shipping checks (unseeded instance)"
+    )
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
 
@@ -109,6 +119,36 @@ def main() -> int:
         unknown.status == 404 and unknown.content_type.startswith("application/json"),
         f"HTTP {unknown.status} {unknown.content_type}",
     )
+
+    if not args.skip_catalog:
+        catalog = fetch(f"{base}/api/catalog/products?page_size=1", timeout=30)
+        body = catalog.json_or_empty()
+        check(
+            "catalogue lists products",
+            catalog.status == 200 and isinstance(body.get("total"), int) and body["total"] > 0,
+            f"HTTP {catalog.status} total={body.get('total')}",
+        )
+        items = body.get("items") or [{}]
+        price = (items[0].get("price_range") or {}).get("min") or {}
+        check(
+            "prices are integer USD minor units",
+            isinstance(price.get("amount_minor"), int) and price.get("currency") == "USD",
+            str(price),
+        )
+        france = fetch(f"{base}/api/shipping/quote?country=FR", timeout=30)
+        quote = france.json_or_empty().get("price") or {}
+        check(
+            "shipping quote for FR",
+            france.status == 200 and isinstance(quote.get("amount_minor"), int) and quote.get("currency") == "USD",
+            f"HTTP {france.status}",
+        )
+        india = fetch(f"{base}/api/shipping/quote?country=IN", timeout=30)
+        error_code = (india.json_or_empty().get("error") or {}).get("code")
+        check(
+            "unsupported destination is a typed error",
+            india.status == 422 and error_code == "unsupported_destination",
+            f"HTTP {india.status} {error_code}",
+        )
 
     if not args.no_frontend:
         index = fetch(f"{base}/", timeout=30)

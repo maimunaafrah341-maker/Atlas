@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "origin_country": "IN",
+  "notice": "Fictional demo configuration. These are demo pricing assumptions, not real or carrier-validated shipping costs. The fictional merchant ships from India to international customers only; India is not a supported destination. This says nothing about PayPal account capabilities (ADR-019).",
+  "currency": "USD",
+  "zones": [
+    {
+      "zone_code": "asia_pacific",
+      "name": "Asia-Pacific",
+      "price_minor": 1500,
+      "countries": [
+        "AU",
+        "JP",
+        "NZ",
+        "SG"
+      ]
+    },
+    {
+      "zone_code": "europe",
+      "name": "Europe",
+      "price_minor": 2000,
+      "countries": [
+        "AT",
+        "BE",
+        "CH",
+        "DE",
+        "DK",
+        "ES",
+        "FI",
+        "FR",
+        "GB",
+        "IE",
+        "IT",
+        "NL",
+        "NO",
+        "PL",
+        "PT",
+        "SE"
+      ]
+    },
+    {
+      "zone_code": "north_america",
+      "name": "North America",
+      "price_minor": 2200,
+      "countries": [
+        "CA",
+        "MX",
+        "US"
+      ]
+    },
+    {
+      "zone_code": "south_america",
+      "name": "South America",
+      "price_minor": 2800,
+      "countries": [
+        "AR",
+        "BR",
+        "CL",
+        "CO",
+        "PE",
+        "UY"
+      ]
+    }
+  ]
+}
