@@ -6,7 +6,7 @@ import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import delete, inspect
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 import app.models  # noqa: F401
@@ -77,12 +77,16 @@ def test_every_vocabulary_value_is_accepted(db_session: Session) -> None:
     db_session.commit()
 
 
-def _rejects(session: Session, change: Callable[[Session], None]) -> None:
+def _rejects(
+    session: Session,
+    change: Callable[[Session], None],
+    expected: type[DBAPIError] | tuple[type[DBAPIError], ...] = IntegrityError,
+) -> None:
     def attempt() -> None:
         change(session)
         session.flush()
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(expected):
         attempt()
     session.rollback()
 
@@ -178,12 +182,30 @@ def test_country_belongs_to_one_zone(db_session: Session) -> None:
     _rejects(db_session, lambda s: s.add(ShippingRateCountry(country_code="FR", shipping_rate_id=other.id)))
 
 
-@pytest.mark.parametrize("code", ["fr", "FRA"])
-def test_country_code_format_enforced(db_session: Session, code: str) -> None:
+# Too-long codes are rejected by a different layer per database: PostgreSQL enforces
+# VARCHAR(2) itself (DataError, before CHECKs run); SQLite ignores VARCHAR length, so the
+# length CHECK rejects it (IntegrityError). Either way the row must not be stored.
+# "F" fits VARCHAR(2), so it exercises the length CHECK on both databases.
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("fr", IntegrityError),
+        ("F", IntegrityError),
+        ("FRA", (IntegrityError, DataError)),
+    ],
+)
+def test_country_code_format_enforced(
+    db_session: Session, code: str, expected: type[DBAPIError] | tuple[type[DBAPIError], ...]
+) -> None:
     rate = ShippingRate(zone_code="z", name="Z", price_minor=1, currency="USD")
     db_session.add(rate)
     db_session.commit()
-    _rejects(db_session, lambda s: s.add(ShippingRateCountry(country_code=code, shipping_rate_id=rate.id)))
+    _rejects(
+        db_session,
+        lambda s: s.add(ShippingRateCountry(country_code=code, shipping_rate_id=rate.id)),
+        expected,
+    )
+    assert db_session.query(ShippingRateCountry).count() == 0
 
 
 def test_negative_shipping_price_rejected(db_session: Session) -> None:
