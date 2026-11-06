@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str = ""
     frontend_dist_dir: Path | None = None
+    # ADR-003: one store currency. Only USD is supported; anything else is a misconfiguration.
+    store_currency: str = "USD"
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -66,6 +68,14 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_path_is_none(cls, value: object) -> object:
         return None if value in ("", None) else value
+
+    @field_validator("store_currency")
+    @classmethod
+    def _only_usd(cls, value: str) -> str:
+        currency = value.strip().upper()
+        if currency != "USD":
+            raise ValueError("STORE_CURRENCY must be USD (ADR-003: single store currency)")
+        return currency
 
     @field_validator("log_level")
     @classmethod

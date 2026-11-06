@@ -22,7 +22,7 @@ jobs:
         database: [sqlite, postgresql]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_USER: atlas
           POSTGRES_PASSWORD: atlas
@@ -75,7 +75,7 @@ jobs:
     needs: [backend, frontend]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_USER: atlas
           POSTGRES_PASSWORD: atlas
@@ -95,15 +95,17 @@ jobs:
         run: |
           docker run -d --name atlas --network host \
             -e PORT=8000 \
+            -e SEED_CATALOG_ON_START=1 \
             -e DATABASE_URL=postgresql://atlas:atlas@localhost:5432/atlas \
             -e RENDER_GIT_COMMIT=${{ github.sha }} \
             atlas:ci
       - name: Smoke test
         run: python scripts/smoke_test.py http://127.0.0.1:8000 --expect-dialect postgresql --wake-timeout 60
-      - name: Restart container and confirm persistence-safe restart
+      - name: Restart container (re-runs migrations and the idempotent seed)
         run: |
           docker restart atlas
           python scripts/smoke_test.py http://127.0.0.1:8000 --expect-dialect postgresql --wake-timeout 60
+          test "$(docker logs atlas 2>&1 | grep -c '"catalogue seed complete"')" -eq 2
       - name: Production refuses SQLite
         run: |
           if docker run --rm -e DATABASE_URL=sqlite:///tmp/x.db atlas:ci; then

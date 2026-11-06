@@ -2,7 +2,15 @@
 
 Multilingual AI commerce copilot for global small businesses: conversational product discovery, grounded merchant knowledge, validated carts, PayPal Sandbox checkout and Make.com automation. *Atlas* is an internal codename.
 
-**Status: M0 (foundation).** This build contains scaffolding, configuration, the database and migration foundation, health endpoints, CI and deployment configuration. **No AI, retrieval, checkout, PayPal or Make features are implemented yet.** See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+**Status: M1 (catalogue, inventory, shipping).** On top of the M0 foundation, this build has:
+- the demo catalogue: 20 products, 60 variants, 5 languages;
+- deterministic catalogue search and a product detail API;
+- audited inventory with a never-negative available-stock invariant;
+- shipping-rate lookup.
+
+**No AI, retrieval, cart, checkout, PayPal or Make features are implemented yet.** See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+
+> **Demo data disclosure.** "Atlas Demo Outfitters" is a fictional, temporary brand. Products, specifications and prices are invented. The es, fr, de and pt-BR product text is **machine-generated and not reviewed by native speakers**; it is flagged `machine_translated` in the data and API. Shipping rates are **fictional demo pricing assumptions, not real or carrier-validated shipping costs**. The fictional merchant ships from India to international destinations only. This story detail makes no claim about PayPal account capabilities.
 
 | Doc | Purpose |
 |---|---|
@@ -29,6 +37,7 @@ cd backend
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements-dev.txt   # macOS/Linux: .venv/bin/python
 .venv/Scripts/alembic upgrade head                             # creates backend/var/atlas.db (SQLite)
+.venv/Scripts/python -m app.seed                               # demo catalogue + shipping zones (create-only, idempotent)
 .venv/Scripts/python -m uvicorn app.main:app_factory --factory --reload --port 8000
 
 # Frontend (second terminal) — proxies /api to 127.0.0.1:8000
@@ -74,6 +83,23 @@ python scripts/smoke_test.py https://<service>.onrender.com --expect-dialect pos
 
 - `GET /healthz` checks liveness only and doesn't touch the database. Render's health check uses it.
 - `GET /api/health` checks readiness: database reachability, dialect, latency, and whether the schema is at the migration head. It returns 503 when degraded.
+
+## Catalogue and shipping API (M1)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/catalog/products` | Search and filter. Parameters: `q`, `lang` (`en es fr de pt-BR`), `category`, `tag` (all must match), `size`, `colour`, `min_price_minor`, `max_price_minor`, `in_stock`, `sort` (`featured relevance price_asc price_desc`), `page`, `page_size` (≤ 50) |
+| `GET /api/catalog/products/{slug}?lang=` | One product with its active variants |
+| `GET /api/shipping/quote?country=FR` | Flat zone rate in USD cents; an unsupported country returns `unsupported_destination` |
+
+- **Money:** always `{"amount_minor": <int cents>, "currency": "USD"}`.
+- **Stock:** shown only as `in_stock`, `low_stock` or `out_of_stock`, never as a count.
+- **Errors:** every error is `{"error": {"code", "message", "details"}}`.
+- **Search limitation:** search matches whole words and word starts, with no stemming ([ADR-021](docs/DECISIONS.md)).
+
+## Seeding
+
+`python -m app.seed` creates only missing rows. It never deletes anything, never writes stock to existing variants, runs in a single transaction, and refuses to run before migrations. `--update` also refreshes names, descriptions and prices; it's for local use only. In the container, `SEED_CATALOG_ON_START=1` runs the create-only seed after migrations; a failure stops startup ([ADR-022](docs/DECISIONS.md)).
 
 ## Deploying (free tier only)
 

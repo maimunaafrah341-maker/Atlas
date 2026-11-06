@@ -83,11 +83,12 @@ All money is stored as an **integer in minor units (USD cents) plus an ISO 4217 
 
 | Table | Key fields | Notes |
 |---|---|---|
-| `products` / `product_translations` | id, status · product_id, lang, name, description, `machine_translated` | Prices are never on translations |
-| `variants` | id, product_id, sku (unique), size, colour, price_minor, currency, stock_on_hand, stock_reserved, low_stock_threshold | `available = on_hand − reserved`, with a CHECK constraint ≥ 0 |
-| `inventory_movements` | variant_id, delta, reason, ref | Append-only audit |
-| `reservations` | id, order_id, variant_id, qty, expires_at, status | active → committed / released |
-| `shipping_rates` | zone, countries, price_minor, currency | Deterministic |
+| `products` / `product_translations` | id, slug (unique), category, status, sort_order · product_id, lang, name, description, `machine_translated`, derived `search_name`/`search_text` | Prices are never on translations. Unique (product, lang). Missing language → English fallback |
+| `product_tags` (M1) | product_id, tag (closed vocabulary) | Feature/activity attributes, filterable portably (D-4) |
+| `variants` | id, product_id, sku (unique), size, colour, price_minor, currency, stock_on_hand, stock_reserved, low_stock_threshold, status | `available = on_hand − reserved`; CHECK `stock_reserved <= stock_on_hand`; unique (product, size, colour) |
+| `inventory_movements` | variant_id, delta_on_hand, delta_reserved, on_hand_after, reserved_after, reason, ref, note | Append-only audit, written in the same transaction as every stock change |
+| `reservations` | id, order_id, variant_id, qty, expires_at, status | active → committed / released (M2) |
+| `shipping_rates` / `shipping_rate_countries` (M1) | zone_code (unique), name, price_minor, currency, status · country_code (PK), shipping_rate_id | Flat rate per zone. A country belongs to at most one zone; unknown → `unsupported_destination` (D-1) |
 | `knowledge_docs` / `knowledge_chunks` | doc: title, topic, lang · chunk: text | Index: PostgreSQL `tsvector` (GIN index, per-language text-search config) or SQLite FTS5 virtual table |
 | `conversations` | session_id, ui_locale, `preferred_lang` (null = Auto), `current_lang` | §8 |
 | `messages` | role, `original_text` (immutable), detected_lang, detect_confidence, response_lang, `lang_source`, retrieval_text | §8 |

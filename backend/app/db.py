@@ -8,6 +8,7 @@ identical, portable migrations on both.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +16,21 @@ from sqlalchemy import Engine, MetaData, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+# Multi-column constraints are named after ALL their columns (column_0_N_name), so two
+# constraints that start with the same column can never collide. Changed in M1, before any
+# named constraint existed in a deployed database.
 NAMING_CONVENTION = {
-    "ix": "ix_%(column_0_label)s",
-    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ix": "ix_%(column_0_N_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
     "ck": "ck_%(table_name)s_%(constraint_name)s",
-    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_N_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
+
+
+def utcnow() -> datetime:
+    """Timezone-aware UTC now; all timestamps are written from Python for portability."""
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):

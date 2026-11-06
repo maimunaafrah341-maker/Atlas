@@ -1,0 +1,1185 @@
+{
+  "version": 1,
+  "brand": "Atlas Demo Outfitters",
+  "notice": "Fictional demo catalogue for Atlas Demo Outfitters, a temporary brand name. Products, specifications and prices are invented. Product text was written with AI assistance; the es, fr, de and pt-BR translations are machine-generated and have not been reviewed by native speakers.",
+  "currency": "USD",
+  "machine_translated_languages": [
+    "es",
+    "fr",
+    "de",
+    "pt-BR"
+  ],
+  "products": [
+    {
+      "slug": "ridgeline-rain-shell",
+      "category": "jackets",
+      "tags": [
+        "waterproof",
+        "breathable",
+        "packable",
+        "hiking"
+      ],
+      "sort_order": 10,
+      "translations": {
+        "en": {
+          "name": "Ridgeline Rain Shell",
+          "description": "Lightweight 2.5-layer waterproof jacket for hiking in changing weather. Packs into its own chest pocket."
+        },
+        "es": {
+          "name": "Chaqueta impermeable Ridgeline",
+          "description": "Chaqueta impermeable ligera de 2,5 capas para senderismo con tiempo cambiante. Se guarda en su propio bolsillo del pecho."
+        },
+        "fr": {
+          "name": "Veste imperméable Ridgeline",
+          "description": "Veste imperméable légère 2,5 couches pour la randonnée par temps changeant. Se range dans sa propre poche poitrine."
+        },
+        "de": {
+          "name": "Ridgeline Regenjacke",
+          "description": "Leichte wasserdichte 2,5-Lagen-Jacke zum Wandern bei wechselhaftem Wetter. Lässt sich in der eigenen Brusttasche verstauen."
+        },
+        "pt-BR": {
+          "name": "Jaqueta impermeável Ridgeline",
+          "description": "Jaqueta impermeável leve de 2,5 camadas para trilhas com tempo instável. Pode ser guardada no próprio bolso do peito."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-RRS-NAV-S",
+          "size": "S",
+          "colour": "navy",
+          "price_minor": 12900,
+          "initial_stock": 8,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-RRS-NAV-M",
+          "size": "M",
+          "colour": "navy",
+          "price_minor": 12900,
+          "initial_stock": 3,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-RRS-NAV-L",
+          "size": "L",
+          "colour": "navy",
+          "price_minor": 12900,
+          "initial_stock": 10,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-RRS-RED-S",
+          "size": "S",
+          "colour": "red",
+          "price_minor": 12900,
+          "initial_stock": 6,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-RRS-RED-M",
+          "size": "M",
+          "colour": "red",
+          "price_minor": 12900,
+          "initial_stock": 9,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-RRS-RED-L",
+          "size": "L",
+          "colour": "red",
+          "price_minor": 12900,
+          "initial_stock": 7,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "summit-3l-shell",
+      "category": "jackets",
+      "tags": [
+        "waterproof",
+        "windproof",
+        "breathable",
+        "trekking",
+        "winter"
+      ],
+      "sort_order": 20,
+      "translations": {
+        "en": {
+          "name": "Summit 3L Shell",
+          "description": "Durable 3-layer waterproof shell built for alpine trekking and winter storms."
+        },
+        "es": {
+          "name": "Chaqueta Summit 3L",
+          "description": "Chaqueta impermeable resistente de 3 capas, diseñada para trekking alpino y tormentas invernales."
+        },
+        "fr": {
+          "name": "Veste Summit 3L",
+          "description": "Veste imperméable résistante 3 couches conçue pour le trekking alpin et les tempêtes hivernales."
+        },
+        "de": {
+          "name": "Summit 3L Hardshell",
+          "description": "Robuste wasserdichte 3-Lagen-Jacke für alpines Trekking und Winterstürme."
+        },
+        "pt-BR": {
+          "name": "Jaqueta Summit 3L",
+          "description": "Jaqueta impermeável resistente de 3 camadas, feita para trekking alpino e tempestades de inverno."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-S3L-BLK-S",
+          "size": "S",
+          "colour": "black",
+          "price_minor": 21900,
+          "initial_stock": 5,
+          "low_stock_threshold": 2
+        },
+        {
+          "sku": "ADO-S3L-BLK-M",
+          "size": "M",
+          "colour": "black",
+          "price_minor": 21900,
+          "initial_stock": 6,
+          "low_stock_threshold": 2
+        },
+        {
+          "sku": "ADO-S3L-BLK-L",
+          "size": "L",
+          "colour": "black",
+          "price_minor": 21900,
+          "initial_stock": 4,
+          "low_stock_threshold": 2
+        }
+      ]
+    },
+    {
+      "slug": "ember-insulated-jacket",
+      "category": "jackets",
+      "tags": [
+        "insulated",
+        "packable",
+        "camping",
+        "travel",
+        "winter"
+      ],
+      "sort_order": 30,
+      "translations": {
+        "en": {
+          "name": "Ember Insulated Jacket",
+          "description": "Warm, packable insulated jacket for cold camp evenings and winter travel."
+        },
+        "es": {
+          "name": "Chaqueta aislante Ember",
+          "description": "Chaqueta aislante, cálida y compresible para noches frías de acampada y viajes de invierno."
+        },
+        "fr": {
+          "name": "Doudoune Ember",
+          "description": "Veste isolante chaude et compressible pour les soirées fraîches au camp et les voyages d'hiver."
+        },
+        "de": {
+          "name": "Ember Isolationsjacke",
+          "description": "Warme, packbare Isolationsjacke für kalte Abende im Camp und Winterreisen."
+        },
+        "pt-BR": {
+          "name": "Jaqueta térmica Ember",
+          "description": "Jaqueta térmica quente e compactável para noites frias no acampamento e viagens de inverno."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-EMB-OLV-M",
+          "size": "M",
+          "colour": "olive",
+          "price_minor": 15900,
+          "initial_stock": 7,
+          "low_stock_threshold": 2
+        },
+        {
+          "sku": "ADO-EMB-OLV-L",
+          "size": "L",
+          "colour": "olive",
+          "price_minor": 15900,
+          "initial_stock": 5,
+          "low_stock_threshold": 2
+        }
+      ]
+    },
+    {
+      "slug": "breeze-wind-jacket",
+      "category": "jackets",
+      "tags": [
+        "windproof",
+        "packable",
+        "trail_running",
+        "travel"
+      ],
+      "sort_order": 40,
+      "translations": {
+        "en": {
+          "name": "Breeze Wind Jacket",
+          "description": "Featherweight windproof jacket for trail running and travel. Folds into a pocket-sized pouch."
+        },
+        "es": {
+          "name": "Cortavientos Breeze",
+          "description": "Chaqueta cortavientos ultraligera para trail running y viajes. Se pliega en una bolsita de bolsillo."
+        },
+        "fr": {
+          "name": "Coupe-vent Breeze",
+          "description": "Veste coupe-vent ultralégère pour le trail et les voyages. Se plie dans une pochette de poche."
+        },
+        "de": {
+          "name": "Breeze Windjacke",
+          "description": "Federleichte, winddichte Jacke für Trailrunning und Reisen. Lässt sich in eine Tasche im Taschenformat falten."
+        },
+        "pt-BR": {
+          "name": "Corta-vento Breeze",
+          "description": "Jaqueta corta-vento ultraleve para corrida em trilha e viagens. Dobra em uma pequena bolsa de bolso."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-BWJ-YEL-S",
+          "size": "S",
+          "colour": "yellow",
+          "price_minor": 6900,
+          "initial_stock": 12,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-BWJ-YEL-M",
+          "size": "M",
+          "colour": "yellow",
+          "price_minor": 6900,
+          "initial_stock": 15,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-BWJ-YEL-L",
+          "size": "L",
+          "colour": "yellow",
+          "price_minor": 6900,
+          "initial_stock": 10,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "merino-crew-base-layer",
+      "category": "base_layers",
+      "tags": [
+        "merino",
+        "breathable",
+        "hiking",
+        "winter"
+      ],
+      "sort_order": 50,
+      "translations": {
+        "en": {
+          "name": "Merino Crew Base Layer",
+          "description": "Soft merino wool base layer that stays warm when damp and resists odour on multi-day hikes."
+        },
+        "es": {
+          "name": "Camiseta térmica de merino",
+          "description": "Primera capa suave de lana merino que abriga aunque esté húmeda y evita los olores en travesías de varios días."
+        },
+        "fr": {
+          "name": "Sous-couche mérinos col rond",
+          "description": "Sous-couche douce en laine mérinos qui reste chaude même humide et limite les odeurs lors des randonnées de plusieurs jours."
+        },
+        "de": {
+          "name": "Merino Funktionsshirt",
+          "description": "Weiches Funktionsshirt aus Merinowolle, das auch feucht wärmt und auf mehrtägigen Touren geruchsarm bleibt."
+        },
+        "pt-BR": {
+          "name": "Camiseta térmica de merino",
+          "description": "Primeira camada macia de lã merino que aquece mesmo úmida e resiste a odores em trilhas de vários dias."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-MCB-BLK-S",
+          "size": "S",
+          "colour": "black",
+          "price_minor": 7900,
+          "initial_stock": 10,
+          "low_stock_threshold": 4
+        },
+        {
+          "sku": "ADO-MCB-BLK-M",
+          "size": "M",
+          "colour": "black",
+          "price_minor": 7900,
+          "initial_stock": 14,
+          "low_stock_threshold": 4
+        },
+        {
+          "sku": "ADO-MCB-BLK-L",
+          "size": "L",
+          "colour": "black",
+          "price_minor": 7900,
+          "initial_stock": 9,
+          "low_stock_threshold": 4
+        },
+        {
+          "sku": "ADO-MCB-GRY-S",
+          "size": "S",
+          "colour": "grey",
+          "price_minor": 7900,
+          "initial_stock": 8,
+          "low_stock_threshold": 4
+        },
+        {
+          "sku": "ADO-MCB-GRY-M",
+          "size": "M",
+          "colour": "grey",
+          "price_minor": 7900,
+          "initial_stock": 12,
+          "low_stock_threshold": 4
+        },
+        {
+          "sku": "ADO-MCB-GRY-L",
+          "size": "L",
+          "colour": "grey",
+          "price_minor": 7900,
+          "initial_stock": 7,
+          "low_stock_threshold": 4
+        }
+      ]
+    },
+    {
+      "slug": "merino-half-zip",
+      "category": "base_layers",
+      "tags": [
+        "merino",
+        "trekking",
+        "winter"
+      ],
+      "sort_order": 60,
+      "translations": {
+        "en": {
+          "name": "Merino Half-Zip",
+          "description": "Midweight merino top with a half-length zip for venting on steep trekking climbs."
+        },
+        "es": {
+          "name": "Jersey de merino con media cremallera",
+          "description": "Prenda de merino de gramaje medio con media cremallera para ventilar en las subidas exigentes de trekking."
+        },
+        "fr": {
+          "name": "Haut mérinos demi-zip",
+          "description": "Haut en mérinos d'épaisseur moyenne avec demi-zip pour s'aérer dans les montées raides en trekking."
+        },
+        "de": {
+          "name": "Merino Half-Zip",
+          "description": "Mittelschweres Merino-Oberteil mit halblangem Reißverschluss zum Lüften bei steilen Trekking-Anstiegen."
+        },
+        "pt-BR": {
+          "name": "Blusa de merino meio zíper",
+          "description": "Blusa de merino de gramatura média com meio zíper para ventilar nas subidas íngremes de trekking."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-MHZ-NAV-M",
+          "size": "M",
+          "colour": "navy",
+          "price_minor": 9500,
+          "initial_stock": 8,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-MHZ-NAV-L",
+          "size": "L",
+          "colour": "navy",
+          "price_minor": 9500,
+          "initial_stock": 9,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-MHZ-NAV-XL",
+          "size": "XL",
+          "colour": "navy",
+          "price_minor": 9500,
+          "initial_stock": 4,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "trail-tech-tee",
+      "category": "base_layers",
+      "tags": [
+        "quick_dry",
+        "breathable",
+        "trail_running",
+        "hiking"
+      ],
+      "sort_order": 70,
+      "translations": {
+        "en": {
+          "name": "Trail Tech Tee",
+          "description": "Quick-drying, breathable T-shirt for trail running and warm-weather hikes."
+        },
+        "es": {
+          "name": "Camiseta técnica Trail",
+          "description": "Camiseta transpirable de secado rápido para trail running y caminatas con calor."
+        },
+        "fr": {
+          "name": "T-shirt technique Trail",
+          "description": "T-shirt respirant à séchage rapide pour le trail et les randonnées par temps chaud."
+        },
+        "de": {
+          "name": "Trail Tech T-Shirt",
+          "description": "Schnell trocknendes, atmungsaktives T-Shirt für Trailrunning und Wanderungen bei warmem Wetter."
+        },
+        "pt-BR": {
+          "name": "Camiseta técnica Trail",
+          "description": "Camiseta respirável de secagem rápida para corrida em trilha e caminhadas no calor."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-TTT-BLU-S",
+          "size": "S",
+          "colour": "blue",
+          "price_minor": 3500,
+          "initial_stock": 20,
+          "low_stock_threshold": 5
+        },
+        {
+          "sku": "ADO-TTT-BLU-M",
+          "size": "M",
+          "colour": "blue",
+          "price_minor": 3500,
+          "initial_stock": 25,
+          "low_stock_threshold": 5
+        },
+        {
+          "sku": "ADO-TTT-BLU-L",
+          "size": "L",
+          "colour": "blue",
+          "price_minor": 3500,
+          "initial_stock": 18,
+          "low_stock_threshold": 5
+        },
+        {
+          "sku": "ADO-TTT-BLU-XL",
+          "size": "XL",
+          "colour": "blue",
+          "price_minor": 3500,
+          "initial_stock": 10,
+          "low_stock_threshold": 5
+        }
+      ]
+    },
+    {
+      "slug": "thermal-base-leggings",
+      "category": "base_layers",
+      "tags": [
+        "merino",
+        "camping",
+        "winter"
+      ],
+      "sort_order": 80,
+      "translations": {
+        "en": {
+          "name": "Thermal Base Leggings",
+          "description": "Merino wool leggings for cold nights in the tent and winter layering."
+        },
+        "es": {
+          "name": "Mallas térmicas",
+          "description": "Mallas de lana merino para noches frías en la tienda de campaña y como capa en invierno."
+        },
+        "fr": {
+          "name": "Collant thermique",
+          "description": "Collant en laine mérinos pour les nuits froides sous la tente et la superposition hivernale."
+        },
+        "de": {
+          "name": "Thermo-Leggings",
+          "description": "Leggings aus Merinowolle für kalte Nächte im Zelt und als Winterunterschicht."
+        },
+        "pt-BR": {
+          "name": "Legging térmica",
+          "description": "Legging de lã merino para noites frias na barraca e como camada no inverno."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-TBL-BLK-S",
+          "size": "S",
+          "colour": "black",
+          "price_minor": 6900,
+          "initial_stock": 6,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-TBL-BLK-M",
+          "size": "M",
+          "colour": "black",
+          "price_minor": 6900,
+          "initial_stock": 9,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-TBL-BLK-L",
+          "size": "L",
+          "colour": "black",
+          "price_minor": 6900,
+          "initial_stock": 7,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "trekker-hiking-trousers",
+      "category": "trousers",
+      "tags": [
+        "quick_dry",
+        "hiking",
+        "trekking"
+      ],
+      "sort_order": 90,
+      "translations": {
+        "en": {
+          "name": "Trekker Hiking Trousers",
+          "description": "Durable, quick-drying hiking trousers with stretch panels and zipped pockets."
+        },
+        "es": {
+          "name": "Pantalón de senderismo Trekker",
+          "description": "Pantalón de senderismo resistente y de secado rápido, con paneles elásticos y bolsillos con cremallera."
+        },
+        "fr": {
+          "name": "Pantalon de randonnée Trekker",
+          "description": "Pantalon de randonnée résistant à séchage rapide, avec empiècements extensibles et poches zippées."
+        },
+        "de": {
+          "name": "Trekker Wanderhose",
+          "description": "Robuste, schnell trocknende Wanderhose mit Stretch-Einsätzen und Reißverschlusstaschen."
+        },
+        "pt-BR": {
+          "name": "Calça de trilha Trekker",
+          "description": "Calça de trilha resistente e de secagem rápida, com painéis elásticos e bolsos com zíper."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-THT-KHA-S",
+          "size": "S",
+          "colour": "khaki",
+          "price_minor": 8900,
+          "initial_stock": 9,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-THT-KHA-M",
+          "size": "M",
+          "colour": "khaki",
+          "price_minor": 8900,
+          "initial_stock": 12,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-THT-KHA-L",
+          "size": "L",
+          "colour": "khaki",
+          "price_minor": 8900,
+          "initial_stock": 11,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-THT-KHA-XL",
+          "size": "XL",
+          "colour": "khaki",
+          "price_minor": 8900,
+          "initial_stock": 0,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "convertible-zip-off-trousers",
+      "category": "trousers",
+      "tags": [
+        "quick_dry",
+        "uv_protection",
+        "hiking",
+        "travel"
+      ],
+      "sort_order": 100,
+      "translations": {
+        "en": {
+          "name": "Convertible Zip-Off Trousers",
+          "description": "Travel trousers that zip off into shorts, with built-in sun protection."
+        },
+        "es": {
+          "name": "Pantalón desmontable",
+          "description": "Pantalón de viaje que se convierte en pantalón corto con cremalleras, con protección solar integrada."
+        },
+        "fr": {
+          "name": "Pantalon convertible",
+          "description": "Pantalon de voyage qui se transforme en short grâce à des zips, avec protection solaire intégrée."
+        },
+        "de": {
+          "name": "Zip-Off-Hose",
+          "description": "Reisehose, die sich per Reißverschluss in eine Shorts verwandelt, mit integriertem Sonnenschutz."
+        },
+        "pt-BR": {
+          "name": "Calça conversível",
+          "description": "Calça de viagem que vira bermuda com zíperes, com proteção solar integrada."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-CZT-GRY-M",
+          "size": "M",
+          "colour": "grey",
+          "price_minor": 9900,
+          "initial_stock": 7,
+          "low_stock_threshold": 2
+        },
+        {
+          "sku": "ADO-CZT-GRY-L",
+          "size": "L",
+          "colour": "grey",
+          "price_minor": 9900,
+          "initial_stock": 6,
+          "low_stock_threshold": 2
+        }
+      ]
+    },
+    {
+      "slug": "storm-overtrousers",
+      "category": "trousers",
+      "tags": [
+        "waterproof",
+        "packable",
+        "hiking"
+      ],
+      "sort_order": 110,
+      "translations": {
+        "en": {
+          "name": "Storm Overtrousers",
+          "description": "Packable waterproof overtrousers with full side zips so you can pull them on over boots."
+        },
+        "es": {
+          "name": "Cubrepantalón impermeable Storm",
+          "description": "Cubrepantalón impermeable y compresible con cremalleras laterales completas para ponérselo sin quitarse las botas."
+        },
+        "fr": {
+          "name": "Surpantalon imperméable Storm",
+          "description": "Surpantalon imperméable compressible avec zips latéraux intégraux pour l'enfiler par-dessus les chaussures."
+        },
+        "de": {
+          "name": "Storm Regenüberhose",
+          "description": "Packbare, wasserdichte Überhose mit durchgehenden Seitenreißverschlüssen zum Anziehen über den Schuhen."
+        },
+        "pt-BR": {
+          "name": "Sobrecalça impermeável Storm",
+          "description": "Sobrecalça impermeável e compactável com zíperes laterais completos para vestir por cima das botas."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-SOT-BLK-S",
+          "size": "S",
+          "colour": "black",
+          "price_minor": 10900,
+          "initial_stock": 5,
+          "low_stock_threshold": 2
+        },
+        {
+          "sku": "ADO-SOT-BLK-M",
+          "size": "M",
+          "colour": "black",
+          "price_minor": 10900,
+          "initial_stock": 8,
+          "low_stock_threshold": 2
+        },
+        {
+          "sku": "ADO-SOT-BLK-L",
+          "size": "L",
+          "colour": "black",
+          "price_minor": 10900,
+          "initial_stock": 6,
+          "low_stock_threshold": 2
+        }
+      ]
+    },
+    {
+      "slug": "ridge-hiking-shorts",
+      "category": "trousers",
+      "tags": [
+        "quick_dry",
+        "hiking",
+        "trail_running"
+      ],
+      "sort_order": 120,
+      "translations": {
+        "en": {
+          "name": "Ridge Hiking Shorts",
+          "description": "Quick-drying shorts for hot-weather hikes and trail runs."
+        },
+        "es": {
+          "name": "Pantalón corto de senderismo Ridge",
+          "description": "Pantalón corto de secado rápido para caminatas con calor y carreras por montaña."
+        },
+        "fr": {
+          "name": "Short de randonnée Ridge",
+          "description": "Short à séchage rapide pour les randonnées par forte chaleur et les sorties trail."
+        },
+        "de": {
+          "name": "Ridge Wandershorts",
+          "description": "Schnell trocknende Shorts für Wanderungen bei Hitze und Trailläufe."
+        },
+        "pt-BR": {
+          "name": "Bermuda de trilha Ridge",
+          "description": "Bermuda de secagem rápida para caminhadas no calor e corridas em trilha."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-RHS-OLV-M",
+          "size": "M",
+          "colour": "olive",
+          "price_minor": 4900,
+          "initial_stock": 14,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-RHS-OLV-L",
+          "size": "L",
+          "colour": "olive",
+          "price_minor": 4900,
+          "initial_stock": 11,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "merino-hiking-socks",
+      "category": "socks",
+      "tags": [
+        "merino",
+        "hiking",
+        "trekking"
+      ],
+      "sort_order": 130,
+      "translations": {
+        "en": {
+          "name": "Merino Hiking Socks",
+          "description": "Cushioned merino socks for long days on the trail."
+        },
+        "es": {
+          "name": "Calcetines de senderismo de merino",
+          "description": "Calcetines acolchados de merino para largas jornadas por el sendero."
+        },
+        "fr": {
+          "name": "Chaussettes de randonnée mérinos",
+          "description": "Chaussettes rembourrées en mérinos pour les longues journées sur les sentiers."
+        },
+        "de": {
+          "name": "Merino Wandersocken",
+          "description": "Gepolsterte Merinosocken für lange Tage auf dem Trail."
+        },
+        "pt-BR": {
+          "name": "Meias de trilha de merino",
+          "description": "Meias acolchoadas de merino para longos dias na trilha."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-MHS-GRY-S",
+          "size": "S",
+          "colour": "grey",
+          "price_minor": 2400,
+          "initial_stock": 25,
+          "low_stock_threshold": 6
+        },
+        {
+          "sku": "ADO-MHS-GRY-M",
+          "size": "M",
+          "colour": "grey",
+          "price_minor": 2400,
+          "initial_stock": 30,
+          "low_stock_threshold": 6
+        },
+        {
+          "sku": "ADO-MHS-GRY-L",
+          "size": "L",
+          "colour": "grey",
+          "price_minor": 2400,
+          "initial_stock": 22,
+          "low_stock_threshold": 6
+        }
+      ]
+    },
+    {
+      "slug": "lightweight-trail-socks",
+      "category": "socks",
+      "tags": [
+        "quick_dry",
+        "breathable",
+        "trail_running"
+      ],
+      "sort_order": 140,
+      "translations": {
+        "en": {
+          "name": "Lightweight Trail Socks",
+          "description": "Thin, breathable socks for trail running in warm weather."
+        },
+        "es": {
+          "name": "Calcetines ligeros de trail",
+          "description": "Calcetines finos y transpirables para correr por montaña con calor."
+        },
+        "fr": {
+          "name": "Chaussettes trail légères",
+          "description": "Chaussettes fines et respirantes pour le trail par temps chaud."
+        },
+        "de": {
+          "name": "Leichte Trailsocken",
+          "description": "Dünne, atmungsaktive Socken für Trailrunning bei warmem Wetter."
+        },
+        "pt-BR": {
+          "name": "Meias leves de trilha",
+          "description": "Meias finas e respiráveis para corrida em trilha no calor."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-LTS-BLU-S",
+          "size": "S",
+          "colour": "blue",
+          "price_minor": 1800,
+          "initial_stock": 20,
+          "low_stock_threshold": 6
+        },
+        {
+          "sku": "ADO-LTS-BLU-M",
+          "size": "M",
+          "colour": "blue",
+          "price_minor": 1800,
+          "initial_stock": 24,
+          "low_stock_threshold": 6
+        },
+        {
+          "sku": "ADO-LTS-BLU-L",
+          "size": "L",
+          "colour": "blue",
+          "price_minor": 1800,
+          "initial_stock": 18,
+          "low_stock_threshold": 6
+        }
+      ]
+    },
+    {
+      "slug": "liner-socks-two-pack",
+      "category": "socks",
+      "tags": [
+        "quick_dry",
+        "hiking",
+        "travel"
+      ],
+      "sort_order": 150,
+      "translations": {
+        "en": {
+          "name": "Liner Socks Two-Pack",
+          "description": "Thin liner socks worn under hiking socks to reduce blisters. Two pairs per pack."
+        },
+        "es": {
+          "name": "Calcetines interiores (pack de dos)",
+          "description": "Calcetines interiores finos que se llevan bajo los de senderismo para reducir las ampollas. Dos pares por paquete."
+        },
+        "fr": {
+          "name": "Sous-chaussettes (lot de deux)",
+          "description": "Sous-chaussettes fines à porter sous les chaussettes de randonnée pour limiter les ampoules. Deux paires par lot."
+        },
+        "de": {
+          "name": "Liner-Socken im Doppelpack",
+          "description": "Dünne Unterziehsocken für unter Wandersocken, die Blasen vorbeugen. Zwei Paar pro Packung."
+        },
+        "pt-BR": {
+          "name": "Meias liner (kit com duas)",
+          "description": "Meias finas para usar por baixo das meias de trilha e reduzir bolhas. Dois pares por kit."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-LSP-BLK-M",
+          "size": "M",
+          "colour": "black",
+          "price_minor": 1600,
+          "initial_stock": 30,
+          "low_stock_threshold": 6
+        },
+        {
+          "sku": "ADO-LSP-BLK-L",
+          "size": "L",
+          "colour": "black",
+          "price_minor": 1600,
+          "initial_stock": 26,
+          "low_stock_threshold": 6
+        }
+      ]
+    },
+    {
+      "slug": "expedition-wool-socks",
+      "category": "socks",
+      "tags": [
+        "merino",
+        "trekking",
+        "winter"
+      ],
+      "sort_order": 160,
+      "translations": {
+        "en": {
+          "name": "Expedition Wool Socks",
+          "description": "Heavyweight wool socks for winter treks and cold mountain huts."
+        },
+        "es": {
+          "name": "Calcetines de lana Expedition",
+          "description": "Calcetines gruesos de lana para travesías invernales y refugios de montaña fríos."
+        },
+        "fr": {
+          "name": "Chaussettes en laine Expedition",
+          "description": "Chaussettes épaisses en laine pour les treks hivernaux et les refuges de montagne froids."
+        },
+        "de": {
+          "name": "Expedition Wollsocken",
+          "description": "Dicke Wollsocken für Wintertouren und kalte Berghütten."
+        },
+        "pt-BR": {
+          "name": "Meias de lã Expedition",
+          "description": "Meias grossas de lã para travessias de inverno e abrigos de montanha frios."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-EWS-CHA-M",
+          "size": "M",
+          "colour": "charcoal",
+          "price_minor": 2900,
+          "initial_stock": 15,
+          "low_stock_threshold": 5
+        },
+        {
+          "sku": "ADO-EWS-CHA-L",
+          "size": "L",
+          "colour": "charcoal",
+          "price_minor": 2900,
+          "initial_stock": 12,
+          "low_stock_threshold": 5
+        }
+      ]
+    },
+    {
+      "slug": "merino-beanie",
+      "category": "accessories",
+      "tags": [
+        "merino",
+        "hiking",
+        "winter"
+      ],
+      "sort_order": 170,
+      "translations": {
+        "en": {
+          "name": "Merino Beanie",
+          "description": "Warm, soft merino beanie for winter hikes and chilly mornings."
+        },
+        "es": {
+          "name": "Gorro de merino",
+          "description": "Gorro de merino suave y cálido para caminatas invernales y mañanas frías."
+        },
+        "fr": {
+          "name": "Bonnet en mérinos",
+          "description": "Bonnet en mérinos doux et chaud pour les randonnées d'hiver et les matins frais."
+        },
+        "de": {
+          "name": "Merino-Mütze",
+          "description": "Warme, weiche Merino-Mütze für Winterwanderungen und kühle Morgen."
+        },
+        "pt-BR": {
+          "name": "Gorro de merino",
+          "description": "Gorro de merino macio e quente para trilhas de inverno e manhãs frias."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-MBN-RED-OS",
+          "size": "ONE_SIZE",
+          "colour": "red",
+          "price_minor": 2900,
+          "initial_stock": 18,
+          "low_stock_threshold": 4
+        },
+        {
+          "sku": "ADO-MBN-NAV-OS",
+          "size": "ONE_SIZE",
+          "colour": "navy",
+          "price_minor": 2900,
+          "initial_stock": 16,
+          "low_stock_threshold": 4
+        }
+      ]
+    },
+    {
+      "slug": "sun-trek-hat",
+      "category": "accessories",
+      "tags": [
+        "uv_protection",
+        "quick_dry",
+        "hiking",
+        "travel"
+      ],
+      "sort_order": 180,
+      "translations": {
+        "en": {
+          "name": "Sun Trek Hat",
+          "description": "Wide-brim hat with UPF 50 sun protection and a quick-drying band."
+        },
+        "es": {
+          "name": "Sombrero de trekking para el sol",
+          "description": "Sombrero de ala ancha con protección solar UPF 50 y cinta de secado rápido."
+        },
+        "fr": {
+          "name": "Chapeau de trek anti-UV",
+          "description": "Chapeau à large bord avec protection solaire UPF 50 et bandeau à séchage rapide."
+        },
+        "de": {
+          "name": "Sun Trek Hut",
+          "description": "Hut mit breiter Krempe, UPF 50 Sonnenschutz und schnell trocknendem Schweißband."
+        },
+        "pt-BR": {
+          "name": "Chapéu de trekking para sol",
+          "description": "Chapéu de aba larga com proteção solar UPF 50 e faixa de secagem rápida."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-STH-KHA-SM",
+          "size": "S_M",
+          "colour": "khaki",
+          "price_minor": 3500,
+          "initial_stock": 10,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-STH-KHA-LXL",
+          "size": "L_XL",
+          "colour": "khaki",
+          "price_minor": 3500,
+          "initial_stock": 9,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "trail-gloves",
+      "category": "accessories",
+      "tags": [
+        "windproof",
+        "hiking",
+        "winter"
+      ],
+      "sort_order": 190,
+      "translations": {
+        "en": {
+          "name": "Trail Gloves",
+          "description": "Windproof gloves with touchscreen-friendly fingertips for cold-weather hikes."
+        },
+        "es": {
+          "name": "Guantes de montaña",
+          "description": "Guantes cortavientos con yemas compatibles con pantallas táctiles para caminatas con frío."
+        },
+        "fr": {
+          "name": "Gants de randonnée",
+          "description": "Gants coupe-vent avec bouts des doigts compatibles écran tactile pour les randonnées par temps froid."
+        },
+        "de": {
+          "name": "Trail-Handschuhe",
+          "description": "Winddichte Handschuhe mit touchscreenfähigen Fingerspitzen für Wanderungen bei Kälte."
+        },
+        "pt-BR": {
+          "name": "Luvas de trilha",
+          "description": "Luvas corta-vento com pontas dos dedos compatíveis com telas sensíveis ao toque para trilhas no frio."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-TGL-BLK-S",
+          "size": "S",
+          "colour": "black",
+          "price_minor": 3900,
+          "initial_stock": 8,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-TGL-BLK-M",
+          "size": "M",
+          "colour": "black",
+          "price_minor": 3900,
+          "initial_stock": 12,
+          "low_stock_threshold": 3
+        },
+        {
+          "sku": "ADO-TGL-BLK-L",
+          "size": "L",
+          "colour": "black",
+          "price_minor": 3900,
+          "initial_stock": 9,
+          "low_stock_threshold": 3
+        }
+      ]
+    },
+    {
+      "slug": "multi-neck-gaiter",
+      "category": "accessories",
+      "tags": [
+        "uv_protection",
+        "quick_dry",
+        "trail_running",
+        "hiking"
+      ],
+      "sort_order": 200,
+      "translations": {
+        "en": {
+          "name": "Multi Neck Gaiter",
+          "description": "Versatile, quick-drying neck gaiter that protects against sun and wind on the trail."
+        },
+        "es": {
+          "name": "Braga de cuello multiusos",
+          "description": "Braga de cuello versátil y de secado rápido que protege del sol y del viento en el sendero."
+        },
+        "fr": {
+          "name": "Tour de cou multifonction",
+          "description": "Tour de cou polyvalent à séchage rapide qui protège du soleil et du vent sur les sentiers."
+        },
+        "de": {
+          "name": "Multifunktionstuch",
+          "description": "Vielseitiges, schnell trocknendes Halstuch, das auf dem Trail vor Sonne und Wind schützt."
+        },
+        "pt-BR": {
+          "name": "Bandana tubular multiuso",
+          "description": "Bandana tubular versátil de secagem rápida que protege do sol e do vento na trilha."
+        }
+      },
+      "variants": [
+        {
+          "sku": "ADO-MNG-BLU-OS",
+          "size": "ONE_SIZE",
+          "colour": "blue",
+          "price_minor": 1900,
+          "initial_stock": 30,
+          "low_stock_threshold": 5
+        },
+        {
+          "sku": "ADO-MNG-GRN-OS",
+          "size": "ONE_SIZE",
+          "colour": "green",
+          "price_minor": 1900,
+          "initial_stock": 25,
+          "low_stock_threshold": 5
+        }
+      ]
+    }
+  ]
+}
