@@ -63,7 +63,7 @@ npm run lint && npm run typecheck && npm test && npm run build
 ```
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs four checks:
-- the backend checks on **SQLite and PostgreSQL 16**;
+- the backend checks on **SQLite and PostgreSQL 18**;
 - the frontend checks;
 - a production-mode **Docker** container against PostgreSQL, which runs the smoke test and then repeats it after a restart;
 - a check that production refuses SQLite.
@@ -93,8 +93,9 @@ python scripts/smoke_test.py https://<service>.onrender.com --expect-dialect pos
 | `GET /api/shipping/quote?country=FR` | Flat zone rate in USD cents; an unsupported country returns `unsupported_destination` |
 
 - **Money:** always `{"amount_minor": <int cents>, "currency": "USD"}`.
+- **Price range:** in search results, `price_range` covers only the variants matching the filters (those with `matches_filters: true`). `price_asc` sorts by its minimum and `price_desc` by its maximum. The product detail range covers all active variants.
 - **Stock:** shown only as `in_stock`, `low_stock` or `out_of_stock`, never as a count.
-- **Errors:** every error is `{"error": {"code", "message", "details"}}`.
+- **Errors:** every error is `{"error": {"code", "message", "details"}}`. Server errors (5xx) return a generic message and `details: [{"reference": "<id>"}]`; the real error is logged once under that reference and never sent to the client.
 - **Search limitation:** search matches whole words and word starts, with no stemming ([ADR-021](docs/DECISIONS.md)).
 
 ## Seeding
@@ -106,7 +107,7 @@ python scripts/smoke_test.py https://<service>.onrender.com --expect-dialect pos
 1. **Database.** Create a free **Neon** project in **AWS US West 2 (Oregon)**, the same region as the Render service (`region: oregon` in `render.yaml`). Copy its connection string, which must include `sslmode=require`.
 2. **Code.** Push this repository to GitHub (`maimunaafrah341-maker/Atlas`).
 3. **Render.** Choose *New → Blueprint* and select the repo. Render reads [render.yaml](render.yaml), which defines one **free** Docker web service. When prompted, paste the Neon URL as `DATABASE_URL`.
-4. **Startup.** On boot, the container runs `alembic upgrade head` and then starts uvicorn. Production refuses to start without a PostgreSQL `DATABASE_URL`.
+4. **Startup.** On boot, the container runs `alembic upgrade head`, then the create-only seed if `SEED_CATALOG_ON_START=1`, then starts uvicorn. Any failure stops startup. Production refuses to start without a PostgreSQL `DATABASE_URL`.
 5. **Verify.** Run the deployed smoke test above.
 
 Free-tier behaviour: the service sleeps after inactivity, and the first request wakes it, which can take about a minute. Data is in Neon, so restarts and redeploys don't lose it.
