@@ -29,8 +29,8 @@ M1_TABLES = {
 }
 
 
-def test_head_is_m1_migration() -> None:
-    assert head_revision() == "0002_catalog_inventory_shipping"
+def test_head_is_m2_cart_migration() -> None:
+    assert head_revision() == "0003_cart_reservations"
 
 
 def test_models_match_migrated_schema(db_session: Session) -> None:
@@ -42,7 +42,8 @@ def test_models_match_migrated_schema(db_session: Session) -> None:
 def test_check_constraint_names_match_models(db_session: Session) -> None:
     inspector = inspect(db_session.connection())
     assert set(inspector.get_table_names()) >= M1_TABLES
-    for table in M1_TABLES:
+    # Every table the models define, including M2's carts and reservations.
+    for table in Base.metadata.tables:
         expected = {
             constraint.name
             for constraint in Base.metadata.tables[table].constraints

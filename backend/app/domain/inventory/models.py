@@ -14,8 +14,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base, utcnow
 from app.domain.catalog.vocab import sql_in
 
-# M1 reasons only. Reservation, release and sale reasons arrive with M2/M3 via a migration.
-MOVEMENT_REASONS: tuple[str, ...] = ("initial_stock", "restock", "adjustment")
+# Changes to stock_on_hand (M1). Only these are accepted by inventory.adjust_stock.
+STOCK_ADJUSTMENT_REASONS: tuple[str, ...] = ("initial_stock", "restock", "adjustment")
+# Changes to stock_reserved (M2): a cart reservation holds stock, is released, or expires.
+# Sale/commit reasons arrive with M3 (payment capture) via their own migration.
+RESERVATION_REASONS: tuple[str, ...] = ("reservation_hold", "reservation_release", "reservation_expiry")
+MOVEMENT_REASONS: tuple[str, ...] = STOCK_ADJUSTMENT_REASONS + RESERVATION_REASONS
 
 
 class InventoryMovement(Base):
@@ -28,6 +32,9 @@ class InventoryMovement(Base):
     on_hand_after: Mapped[int] = mapped_column(Integer)
     reserved_after: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(String(24))
+    # Set exactly for reservation movements (M2, ADR-024); NULL for stock adjustments.
+    # RESTRICT: a reservation with movements is audit history and is never deleted.
+    reservation_id: Mapped[int | None] = mapped_column(ForeignKey("reservations.id", ondelete="RESTRICT"))
     ref: Mapped[str | None] = mapped_column(String(64))
     # Merchant-facing note. Must never contain customer personal data.
     note: Mapped[str | None] = mapped_column(Text)
@@ -35,9 +42,22 @@ class InventoryMovement(Base):
 
     __table_args__ = (
         CheckConstraint(sql_in("reason", MOVEMENT_REASONS), name="reason"),
+        # Stock adjustments move only on-hand stock; reservation movements move only reserved stock.
+        CheckConstraint(
+            f"({sql_in('reason', RESERVATION_REASONS)} AND delta_on_hand = 0 AND delta_reserved <> 0)"
+            f" OR ({sql_in('reason', STOCK_ADJUSTMENT_REASONS)} AND delta_reserved = 0)",
+            name="reason_deltas",
+        ),
+        # Reservation movements always name their reservation; stock adjustments never do.
+        CheckConstraint(
+            f"({sql_in('reason', RESERVATION_REASONS)} AND reservation_id IS NOT NULL)"
+            f" OR ({sql_in('reason', STOCK_ADJUSTMENT_REASONS)} AND reservation_id IS NULL)",
+            name="reservation_link",
+        ),
         CheckConstraint("delta_on_hand <> 0 OR delta_reserved <> 0", name="non_zero_delta"),
         CheckConstraint("on_hand_after >= 0", name="on_hand_after_non_negative"),
         CheckConstraint("reserved_after >= 0", name="reserved_after_non_negative"),
         CheckConstraint("reserved_after <= on_hand_after", name="available_after_non_negative"),
         Index("ix_inventory_movements_variant_id_created_at", "variant_id", "created_at"),
+        Index("ix_inventory_movements_reservation_id", "reservation_id"),
     )

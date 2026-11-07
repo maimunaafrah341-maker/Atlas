@@ -77,6 +77,10 @@ def test_adjustment_cannot_make_available_negative(stocked: Session) -> None:
         (-1, "restock", InvalidQuantity),
         (-1, "initial_stock", InvalidQuantity),
         (1, "sale", InvalidMovementReason),
+        # Reservation reasons move reserved stock; adjust_stock never writes them.
+        (1, "reservation_hold", InvalidMovementReason),
+        (-1, "reservation_release", InvalidMovementReason),
+        (-1, "reservation_expiry", InvalidMovementReason),
     ],
 )
 def test_invalid_changes_rejected_without_side_effects(

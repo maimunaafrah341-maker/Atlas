@@ -12,9 +12,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, MetaData, create_engine, event
+from sqlalchemy import DateTime, Dialect, Engine, MetaData, TypeDecorator, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from app.clock import as_utc
 
 # Multi-column constraints are named after ALL their columns (column_0_N_name), so two
 # constraints that start with the same column can never collide. Changed in M1, before any
@@ -31,6 +33,29 @@ NAMING_CONVENTION = {
 def utcnow() -> datetime:
     """Timezone-aware UTC now; all timestamps are written from Python for portability."""
     return datetime.now(UTC)
+
+
+class UTCDateTime(TypeDecorator[datetime]):
+    """``DateTime(timezone=True)`` that always returns aware UTC, on SQLite and PostgreSQL.
+
+    Writes must be timezone-aware (a naive value is rejected, because its meaning is
+    ambiguous) and are converted to UTC first: SQLite would otherwise store a non-UTC wall
+    time without its offset. Reads are normalised with ``as_utc``. Bound parameters in
+    comparisons (``expires_at <= :now``) go through the same conversion.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("UTCDateTime requires a timezone-aware datetime")
+        return value.astimezone(UTC)
+
+    def process_result_value(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        return None if value is None else as_utc(value)
 
 
 class Base(DeclarativeBase):

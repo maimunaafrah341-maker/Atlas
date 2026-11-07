@@ -6,11 +6,12 @@ here when they start using them; M0 reads only what it needs.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -56,6 +57,8 @@ class Settings(BaseSettings):
     frontend_dist_dir: Path | None = None
     # ADR-003: one store currency. Only USD is supported; anything else is a misconfiguration.
     store_currency: str = "USD"
+    # M2 (D3): how long a cart's stock reservation holds before it expires. No renewal.
+    reservation_ttl_minutes: int = Field(default=15, ge=1, le=60)
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -99,6 +102,10 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def reservation_ttl(self) -> timedelta:
+        return timedelta(minutes=self.reservation_ttl_minutes)
 
     @property
     def version(self) -> str:

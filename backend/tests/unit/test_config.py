@@ -60,3 +60,20 @@ def test_empty_frontend_dist_dir_means_api_only() -> None:
 def test_version_uses_render_commit() -> None:
     assert settings(render_git_commit="0123456789abcdef0123").version == "0123456789ab"
     assert settings(render_git_commit="").version == "dev"
+
+
+def test_reservation_ttl_defaults_to_fifteen_minutes() -> None:
+    result = settings()
+    assert result.reservation_ttl_minutes == 15
+    assert result.reservation_ttl.total_seconds() == 15 * 60
+
+
+@pytest.mark.parametrize("minutes", [0, -1, 61])
+def test_reservation_ttl_out_of_range_is_refused(minutes: int) -> None:
+    with pytest.raises(ValidationError, match="reservation_ttl_minutes"):
+        settings(reservation_ttl_minutes=minutes)
+
+
+def test_reservation_ttl_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RESERVATION_TTL_MINUTES", "30")
+    assert settings().reservation_ttl_minutes == 30
