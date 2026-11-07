@@ -62,13 +62,39 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str, ensure_ascii=False)
 
 
+class StripQueryString(logging.Filter):
+    """Drop query strings from access-log arguments: they can carry search text or tokens.
+
+    uvicorn logs ``(client, method, path_with_query, http_version, status)``. Any string
+    argument that looks like a request path keeps only its path; everything after ``?`` goes.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                arg.split("?", 1)[0] if isinstance(arg, str) and arg.startswith("/") else arg for arg in record.args
+            )
+        return True
+
+
 def configure_logging(level: str) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error"):
         logger = logging.getLogger(name)
         logger.handlers[:] = []
         logger.propagate = True
+
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(existing, StripQueryString) for existing in access.filters):
+        access.addFilter(StripQueryString())
+    # Respect uvicorn's access-log switch. uvicorn configures logging before it loads the app:
+    # with access logging on, uvicorn.access has uvicorn's own handler, which is swapped for the
+    # JSON handler here; with --no-access-log (production, scripts/start.sh) uvicorn removes that
+    # handler and turns propagation off, and it must stay off.
+    if access.handlers:
+        access.handlers[:] = []
+        access.propagate = True
