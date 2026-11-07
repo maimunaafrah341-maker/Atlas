@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+import app.models  # noqa: F401  (register every table, so all foreign keys resolve in a fresh process)
 from app.api import catalog, health, shipping
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory

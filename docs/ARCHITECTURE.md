@@ -86,14 +86,14 @@ All money is stored as an **integer in minor units (USD cents) plus an ISO 4217 
 | `products` / `product_translations` | id, slug (unique), category, status, sort_order · product_id, lang, name, description, `machine_translated`, derived `search_name`/`search_text` | Prices are never on translations. Unique (product, lang). Missing language → English fallback |
 | `product_tags` (M1) | product_id, tag (closed vocabulary) | Feature/activity attributes, filterable portably (D-4) |
 | `variants` | id, product_id, sku (unique), size, colour, price_minor, currency, stock_on_hand, stock_reserved, low_stock_threshold, status | `available = on_hand − reserved`; CHECK `stock_reserved <= stock_on_hand`; unique (product, size, colour) |
-| `inventory_movements` | variant_id, delta_on_hand, delta_reserved, on_hand_after, reserved_after, reason, ref, note | Append-only audit, written in the same transaction as every stock change |
-| `reservations` | id, order_id, variant_id, qty, expires_at, status | active → committed / released (M2) |
+| `inventory_movements` | variant_id, delta_on_hand, delta_reserved, on_hand_after, reserved_after, reason, reservation_id, ref, note | Append-only audit, written in the same transaction as every stock change. Stock adjustments move only on-hand stock and have no `reservation_id`; reservation movements (`reservation_hold` / `_release` / `_expiry`) move only reserved stock and always name their reservation (M2) |
+| `reservations` / `reservation_items` | public_id, cart_id, cart_version, status, created_at, expires_at, ended_at · variant_id, qty | Owned by a cart (ADR-024). active → released / expired (M2); at most one active per cart; never deleted. Item quantities are the immutable record used for release. No prices: the price snapshot belongs to the M3 order. M3 adds the commit state |
 | `shipping_rates` / `shipping_rate_countries` (M1) | zone_code (unique), name, price_minor, currency, status · country_code (PK), shipping_rate_id | Flat rate per zone. A country belongs to at most one zone; unknown → `unsupported_destination` (D-1) |
 | `knowledge_docs` / `knowledge_chunks` | doc: title, topic, lang · chunk: text | Index: PostgreSQL `tsvector` (GIN index, per-language text-search config) or SQLite FTS5 virtual table |
 | `conversations` | session_id, ui_locale, `preferred_lang` (null = Auto), `current_lang` | §8 |
 | `messages` | role, `original_text` (immutable), detected_lang, detect_confidence, response_lang, `lang_source`, retrieval_text | §8 |
 | `intents` | message_id, json, schema_version, valid | Audit and demo panel |
-| `carts` / `cart_items` | session_id · variant_id, qty | Mutable until review |
+| `carts` / `cart_items` | token_hash, version, created_at, updated_at, expires_at · variant_id, qty (1–10) | Anonymous cart identified by a cookie token, stored hashed (ADR-024). `version` serialises edits and reservations (§3.1). No prices stored; expires 30 days after the last change |
 | `orders` | id (public ref), status, version_hash, currency, subtotal/shipping/total_minor, ship_country, lang | State machine §5 |
 | `order_items` | order_id, variant_id, sku, name_snapshot, unit_price_minor, qty, line_total_minor | **Immutable** snapshot |
 | `payments` | order_id, paypal_order_id, capture_id, status, amount_minor, currency, raw (redacted) | |
@@ -101,6 +101,22 @@ All money is stored as an **integer in minor units (USD cents) plus an ISO 4217 
 | `outbox_events` | id (UUID = idempotency key), type, payload, status, attempts, max_attempts, next_attempt_at, lease_until, last_error, created_at, delivered_at | §4.3 |
 | `automation_deliveries` / `automation_callbacks` | event_id, attempt, http_status, duration_ms, error · event_id, make_status, detail | History view |
 | `exceptions` | type, severity, order_id?, context, status, resolved_note | Exception centre |
+
+### 3.1 Cart and reservation service contract (M2, ADR-024)
+The schema enforces the shape of carts and reservations. The cart and reservation services (M2.2) must keep these rules:
+
+Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows committed before it started, and an `UPDATE` that waited for a row lock re-checks its `WHERE` clause against the newly committed row. SQLite allows one writer at a time. Time comes from the injectable clock and is compared in SQL.
+
+1. **Cart edits.** Every edit (set quantity, remove a line) first advances `carts.version` (`UPDATE carts SET version = version + 1 … WHERE id = :id`), which takes the cart row lock. **Only after that update** does it look up the cart's active reservation and release it, in the same transaction. Under READ COMMITTED, a reservation committed while the edit waited for the lock is visible to that later lookup. A lookup made before the update could miss it and leave a stale hold.
+2. **Repeated reservation requests.** A reservation request first checks for an **active, unexpired** reservation with `cart_version = carts.version`. If one exists, it is returned unchanged. If the active reservation has `expires_at <= now`, it is expired and released first (rule 7), and the request continues with rule 3.
+3. **New reservations.** Otherwise the request advances the version with a compare-and-set (`UPDATE carts SET version = version + 1 … WHERE id = :id AND version = :seen`) and creates a reservation for the new version.
+4. **Lost races.** If the compare-and-set changes no row, another request won the race. Re-read the cart and its reservation: return the active, unexpired reservation if it matches the current version; otherwise return a conflict.
+5. **Serialise around the cart row.** Cart edits, reservation creation and customer release all serialise on the cart row: the version update takes the row lock on PostgreSQL, and SQLite allows one writer. Cart contents and the active reservation are re-read **after** the lock or version update; a reservation is never built from a snapshot read before it.
+6. **Customer release.** Releasing a reservation on request takes the cart row lock first (as in rule 1), then releases with a compare-and-set on the reservation (`… WHERE id = :id AND status = 'active'`).
+7. **Expiry.** Expiry is a compare-and-set on the reservation: `UPDATE reservations SET status = 'expired', ended_at = :now WHERE id = :id AND status = 'active' AND expires_at <= :now`. **The successful active-to-expired transition and its stock release happen in one transaction.** If the compare-and-set changes no row, the reservation was already released or expired, or isn't due yet, and stock is **not** released again. The same no-row rule applies to customer release.
+8. **Sweeps of other carts.** Expired reservations that belong to *other* carts (for example, those holding variants a new reservation needs) are swept in their own short transactions, one reservation each, **before** the current cart's lock is taken. A request never holds one cart's lock while taking another's, so two carts sweeping each other can't deadlock.
+9. **Release quantities.** Reservation item quantities are the immutable record of what was held. Release and expiry use them; they are never recomputed from the current cart.
+10. **Stock and audit together.** Every change to `variants.stock_reserved` writes an `inventory_movements` row with the matching `reservation_id` in the same transaction. The services maintain `stock_reserved = SUM(quantity of items in active reservations)`; the schema cannot check a cross-table sum, so the M2 tests assert it.
 
 ## 4. Key data flows
 

@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, m
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+import app.models  # noqa: F401  (register every table, so all foreign keys resolve in a fresh process)
 from app.config import BACKEND_DIR, get_settings
 from app.db import create_db_engine
 from app.domain.catalog.models import Product, ProductTag, ProductTranslation, Variant

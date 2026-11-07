@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.domain.catalog.models import Variant
 from app.domain.catalog.vocab import StockStatus
-from app.domain.inventory.models import MOVEMENT_REASONS, InventoryMovement
+from app.domain.inventory.models import STOCK_ADJUSTMENT_REASONS, InventoryMovement
 from app.errors import AtlasError
 
 
@@ -86,7 +86,7 @@ def _validate_change(delta: Any, reason: str) -> int:
         raise InvalidQuantity("Stock changes must be whole numbers.")
     if delta == 0:
         raise InvalidQuantity("A stock change of zero is not allowed.")
-    if reason not in MOVEMENT_REASONS:
+    if reason not in STOCK_ADJUSTMENT_REASONS:
         raise InvalidMovementReason(f"Unknown movement reason {reason!r}.")
     if reason in {"initial_stock", "restock"} and delta < 0:
         raise InvalidQuantity(f"A {reason} movement must add stock.")
