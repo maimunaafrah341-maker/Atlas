@@ -135,8 +135,16 @@ def _text_match(column: Any, term: str, languages: tuple[str, ...]) -> ColumnEle
 def _build_query(filters: SearchFilters, plan: _Plan) -> Select[Any]:
     variant_conditions = _variant_conditions(filters)
     has_matching_variant = exists().where(Variant.product_id == Product.id, *variant_conditions).correlate(Product)
+    # The displayed price_range is computed from the same matching variants (variant_matches),
+    # so price sorting always agrees with what the customer sees.
     min_price = (
         select(func.min(Variant.price_minor))
+        .where(Variant.product_id == Product.id, *variant_conditions)
+        .correlate(Product)
+        .scalar_subquery()
+    )
+    max_price = (
+        select(func.max(Variant.price_minor))
         .where(Variant.product_id == Product.id, *variant_conditions)
         .correlate(Product)
         .scalar_subquery()
@@ -157,7 +165,7 @@ def _build_query(filters: SearchFilters, plan: _Plan) -> Select[Any]:
     else:
         score = literal(0)
 
-    query = select(Product.id, score.label("score"), min_price.label("min_price")).where(
+    query = select(Product.id, score.label("score"), min_price.label("min_price"), max_price.label("max_price")).where(
         Product.status == "active", has_matching_variant
     )
     if filters.categories:
@@ -173,14 +181,14 @@ def _build_query(filters: SearchFilters, plan: _Plan) -> Select[Any]:
 
 def _ordered(query: Select[Any], sort: SortOrder) -> Select[Any]:
     score = query.selected_columns.score
-    min_price = query.selected_columns.min_price
     tiebreak = (Product.sort_order, Product.id)
     if sort == "relevance":
         return query.order_by(score.desc(), *tiebreak)
+    # Cheapest first by the lowest matching price; dearest first by the highest matching price.
     if sort == "price_asc":
-        return query.order_by(min_price.asc(), *tiebreak)
+        return query.order_by(query.selected_columns.min_price.asc(), *tiebreak)
     if sort == "price_desc":
-        return query.order_by(min_price.desc(), *tiebreak)
+        return query.order_by(query.selected_columns.max_price.desc(), *tiebreak)
     return query.order_by(*tiebreak)
 
 
@@ -201,8 +209,12 @@ def _to_view(product: Product, filters: SearchFilters) -> ProductOut:
     )
     if not active:
         raise ProductNotFound(product.slug)
-    cheapest = min(active, key=lambda variant: variant.price_minor)
-    dearest = max(active, key=lambda variant: variant.price_minor)
+    # price_range covers the variants that match the active filters (all active variants when
+    # there are none). If stock changed between the search and this load so that nothing
+    # matches any more, fall back to all active variants rather than failing the request.
+    matching = [variant for variant in active if variant_matches(variant, filters)] or active
+    cheapest = min(matching, key=lambda variant: variant.price_minor)
+    dearest = max(matching, key=lambda variant: variant.price_minor)
     return ProductOut(
         slug=product.slug,
         category=product.category,

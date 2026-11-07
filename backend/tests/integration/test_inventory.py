@@ -59,6 +59,9 @@ def test_adjustment_cannot_make_available_negative(stocked: Session) -> None:
     with pytest.raises(InsufficientAvailableStock) as caught:
         adjust_stock(stocked, "INV-M", -3, "adjustment")
     assert (caught.value.requested, caught.value.available) == (3, 2)
+    # D-5: the client-facing message and details never carry the available count.
+    assert caught.value.details == [{"sku": "INV-M", "requested": 3}]
+    assert "2" not in caught.value.message
     stocked.rollback()
     current = variant(stocked, "INV-M")
     assert (current.stock_on_hand, current.stock_reserved) == (5, 3)

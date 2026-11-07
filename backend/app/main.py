@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -16,14 +16,9 @@ from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
 from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
+from app.middleware import SafetyMiddleware
 
 logger = logging.getLogger(__name__)
-
-SECURITY_HEADERS = {
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-    "X-Frame-Options": "DENY",
-}
 
 
 def _mount_spa(app: FastAPI, dist: Path) -> None:
@@ -73,13 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.sessions = session_factory(engine)
 
-    @app.middleware("http")
-    async def security_headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        response = await call_next(request)
-        for header, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(header, value)
-        return response
-
+    # Outermost: security headers on every response, and the last-resort JSON 500.
+    app.add_middleware(SafetyMiddleware)
     install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(catalog.router)

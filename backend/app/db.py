@@ -52,10 +52,14 @@ def _configure_sqlite(dbapi_connection: Any, _record: Any) -> None:
 
 
 def create_db_engine(url: str) -> Engine:
-    """Create an engine with settings suited to the database dialect."""
+    """Create an engine with settings suited to the database dialect.
+
+    ``hide_parameters``: SQL errors (and so logged tracebacks) show statements without bound
+    values, which will include customer data from M2 onwards.
+    """
     if url.startswith("sqlite"):
         _ensure_sqlite_directory(url)
-        engine = create_engine(url, connect_args={"check_same_thread": False})
+        engine = create_engine(url, connect_args={"check_same_thread": False}, hide_parameters=True)
         event.listen(engine, "connect", _configure_sqlite)
         return engine
 
@@ -63,6 +67,7 @@ def create_db_engine(url: str) -> Engine:
     # connections before use and recycle them well inside the provider's idle timeout.
     return create_engine(
         url,
+        hide_parameters=True,
         pool_pre_ping=True,
         pool_recycle=300,
         pool_size=5,

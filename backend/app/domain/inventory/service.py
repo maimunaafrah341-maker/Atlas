@@ -49,13 +49,19 @@ class InvalidMovementReason(AtlasError):
 
 
 class InsufficientAvailableStock(AtlasError):
+    """Not enough available stock.
+
+    D-5: the client-facing message and details never contain the available count. Internal
+    callers can still read ``self.available``.
+    """
+
     status_code = 409
     code = "insufficient_available_stock"
 
     def __init__(self, sku: str, requested: int, available: int) -> None:
         super().__init__(
-            f"Variant {sku} has {available} available; {requested} requested.",
-            details=[{"sku": sku, "requested": requested, "available": available}],
+            f"Not enough stock of {sku} for the requested quantity.",
+            details=[{"sku": sku, "requested": requested}],
         )
         self.sku = sku
         self.requested = requested

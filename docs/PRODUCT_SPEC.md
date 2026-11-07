@@ -63,7 +63,8 @@ We track four separate dimensions and never infer one from another:
 - The extracted intent is stored and shown in a debug or "why these results" panel for the demo.
 
 ### F3. Catalogue-grounded discovery and recommendations
-- The backend runs the search (structured filters plus FTS over product text) using the extracted intent.
+- The backend runs the search using the extracted intent: structured filters plus portable word-prefix matching over normalised product text (ADR-021). Every query word must match the start of a word in the product's name or description, in the requested language or English. It behaves identically on SQLite and PostgreSQL. There is no stemming, and this is not full-text search; full-text search is used only for merchant knowledge retrieval (F5, ADR-006).
+- Prices shown in search results (`price_range`) and price sorting use only the variants that match the active filters.
 - The LLM may only recommend product IDs that appear in the backend result set. Any IDs outside that set are dropped.
 - Product cards (name, image, price, stock badge) are rendered from database data. LLM text is checked by a guard that removes or rejects currency amounts and stock counts.
 
