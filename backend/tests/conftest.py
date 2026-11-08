@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import Environment, Settings, normalize_database_url
-from app.db import create_db_engine
+from app.db import create_db_engine, session_factory
 from app.main import create_app
 from app.migrations import alembic_config
 from app.seed import seed_database
@@ -108,9 +108,10 @@ def client(migrated_database_url: str) -> Iterator[TestClient]:
 
 
 def open_session(url: str) -> Iterator[Session]:
+    # The project's session factory, so tests get the same rollback-only protection as the app.
     engine = create_db_engine(url)
     try:
-        with Session(engine) as session:
+        with session_factory(engine)() as session:
             yield session
     finally:
         engine.dispose()

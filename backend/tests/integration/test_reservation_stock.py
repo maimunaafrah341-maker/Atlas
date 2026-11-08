@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
 
 import pytest
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from app.db import create_db_engine
-from app.domain.cart.models import CART_IDLE_LIFETIME, Cart
+from app.db import create_db_engine, session_factory
+from app.domain.cart.models import Cart
 from app.domain.catalog.models import Product, Variant
 from app.domain.inventory.models import InventoryMovement
 from app.domain.inventory.service import (
@@ -27,85 +27,21 @@ from app.domain.inventory.service import (
     hold_reservation_stock,
     release_reservation_stock,
 )
-from app.domain.reservations.models import Reservation, ReservationItem
+from app.domain.reservations.models import Reservation
 from tests.conftest import TEST_DATABASE_URL
 from tests.factories import V, make_product
 from tests.invariants import assert_inventory_invariants
-
-NOW = datetime(2026, 11, 8, 9, 0, tzinfo=UTC)
-TTL = timedelta(minutes=15)
-
-
-def new_cart(session: Session, seed: str) -> Cart:
-    cart = Cart(
-        token_hash=hashlib.sha256(seed.encode()).hexdigest(),
-        created_at=NOW,
-        updated_at=NOW,
-        expires_at=NOW + CART_IDLE_LIFETIME,
-    )
-    session.add(cart)
-    session.flush()
-    return cart
-
-
-def variant_ids(session: Session, *skus: str) -> list[int]:
-    by_sku = dict(session.execute(select(Variant.sku, Variant.id).where(Variant.sku.in_(skus))).all())
-    return [by_sku[sku] for sku in skus]
-
-
-def new_reservation(session: Session, cart: Cart, items: dict[str, int], seed: str = "r") -> int:
-    """An active reservation with items, not yet held (the service writes both in one transaction)."""
-    reservation = Reservation(
-        public_id=hashlib.md5(f"{cart.id}-{seed}".encode(), usedforsecurity=False).hexdigest(),
-        cart_id=cart.id,
-        cart_version=cart.version,
-        status="active",
-        created_at=NOW,
-        expires_at=NOW + TTL,
-    )
-    session.add(reservation)
-    session.flush()
-    for variant_id, quantity in zip(variant_ids(session, *items), items.values(), strict=True):
-        session.add(ReservationItem(reservation_id=reservation.id, variant_id=variant_id, quantity=quantity))
-    session.flush()
-    return reservation.id
-
-
-def end(session: Session, reservation_id: int, status: str) -> None:
-    """The service's compare-and-set, done directly."""
-    changed = session.execute(
-        update(Reservation)
-        .where(Reservation.id == reservation_id, Reservation.status == "active")
-        .values(status=status, ended_at=NOW + TTL)
-        .execution_options(synchronize_session=False)
-    ).rowcount  # type: ignore[attr-defined]
-    assert changed == 1
-
-
-def stock(session: Session, sku: str) -> tuple[int, int]:
-    session.expire_all()
-    row = session.execute(select(Variant.stock_on_hand, Variant.stock_reserved).where(Variant.sku == sku)).one()
-    return row.stock_on_hand, row.stock_reserved
-
-
-def trail(session: Session, reservation_id: int) -> list[tuple[str, str, int, int, int]]:
-    rows = session.execute(
-        select(
-            Variant.sku,
-            InventoryMovement.reason,
-            InventoryMovement.delta_reserved,
-            InventoryMovement.on_hand_after,
-            InventoryMovement.reserved_after,
-        )
-        .join(Variant, Variant.id == InventoryMovement.variant_id)
-        .where(InventoryMovement.reservation_id == reservation_id)
-        .order_by(InventoryMovement.id)
-    ).all()
-    return [tuple(row) for row in rows]  # type: ignore[misc]
-
-
-def movement_count(session: Session) -> int:
-    return len(session.execute(select(InventoryMovement.id)).all())
+from tests.reservation_builders import (
+    NOW,
+    TTL,
+    end,
+    movement_count,
+    new_cart,
+    new_reservation,
+    stock,
+    trail,
+    variant_ids,
+)
 
 
 @pytest.fixture
@@ -307,7 +243,7 @@ def _race(url: str, plans: list[tuple[str, dict[str, int]]]) -> tuple[list[str],
 
     def run(seed: str, items: dict[str, int]) -> None:
         try:
-            with Session(engine) as session:
+            with session_factory(engine)() as session:
                 session.execute(text("SET LOCAL lock_timeout = '10s'"))
                 cart = session.execute(
                     select(Cart).where(Cart.token_hash == hashlib.sha256(seed.encode()).hexdigest())
@@ -336,7 +272,7 @@ def _race(url: str, plans: list[tuple[str, dict[str, int]]]) -> tuple[list[str],
 
 def _carts(url: str, *seeds: str, variants: list[V]) -> None:
     engine = create_db_engine(url)
-    with Session(engine) as session:
+    with session_factory(engine)() as session:
         make_product(session, "race", variants=variants)
         for seed in seeds:
             new_cart(session, seed)
@@ -352,7 +288,7 @@ def test_concurrent_holds_on_the_last_unit_never_oversell(migrated_database_url:
     assert errors == []
     assert sorted(outcomes) == ["held", "short:1", "short:1", "short:1"]
     engine = create_db_engine(migrated_database_url)
-    with Session(engine) as session:
+    with session_factory(engine)() as session:
         assert stock(session, "LAST") == (1, 1)
         assert_inventory_invariants(session)
     engine.dispose()
@@ -368,7 +304,7 @@ def test_overlapping_multi_variant_holds_do_not_deadlock(migrated_database_url: 
     assert errors == []
     assert sorted(outcomes) == ["held", "short:2"]
     engine = create_db_engine(migrated_database_url)
-    with Session(engine) as session:
+    with session_factory(engine)() as session:
         assert stock(session, "X") == (1, 1)
         assert stock(session, "Y") == (1, 1)
         assert_inventory_invariants(session)
