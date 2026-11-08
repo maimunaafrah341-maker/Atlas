@@ -4,7 +4,7 @@ Status: Approved direction (revision 2) · Companion docs: [PRODUCT_SPEC.md](PRO
 
 ## 1. Shape of the system
 
-Atlas is a **modular monolith**. One FastAPI process serves both the API and the built React app, from a Docker image on a **Render free web service**. Deployed data lives in a **free managed PostgreSQL** database (Neon, ADR-002). That database is outside Render, so data survives restarts, redeploys and free-tier sleep. SQLite is used for local development and fast tests only, and the deployed app refuses to start with it. Background work (outbox dispatch, reservation expiry) runs as in-process asyncio loops whose state lives entirely in the database. The external parties are PayPal Sandbox, Gemini (behind a provider interface) and Make.
+Atlas is a **modular monolith**. One FastAPI process serves both the API and the built React app, from a Docker image on a **Render free web service**. Deployed data lives in a **free managed PostgreSQL** database (Neon, ADR-002). That database is outside Render, so data survives restarts, redeploys and free-tier sleep. SQLite is used for local development and fast tests only, and the deployed app refuses to start with it. Background work (outbox dispatch, M4) runs as an in-process asyncio loop whose state lives entirely in the database. Reservation expiry has no loop: it is applied lazily when a cart or the stock it needs is next used (ADR-024). The external parties are PayPal Sandbox, Gemini (behind a provider interface) and Make.
 
 ```
                 ┌──────────────────────── Browser (UNTRUSTED) ───────────────────────┐
@@ -22,7 +22,7 @@ Atlas is a **modular monolith**. One FastAPI process serves both the API and the
 │   admin/* (admin session) ─► read models, retry, resolve                                             │
 │   integrations/make/callback ◄──── secret header ◄─────────────────────────────── Make              │
 │ workers: outbox dispatcher ──API key + HMAC──► Make webhook → router → Sheets / Gmail / Telegram     │
-│          reservation expiry                                                                          │
+│          (reservation expiry is lazy: no worker, ADR-024)                                            │
 └──────────────────────────────┬───────────────────────────────────────────────────────────────────────┘
                                │ TLS (sslmode=require)
                      Managed PostgreSQL (Neon free)   ·   local/tests: SQLite file
@@ -61,7 +61,7 @@ atlas/
 │   │   │                        #   orchestrator, guards
 │   │   ├── i18n/                # detect.py, policy.py, placeholders.py, catalogs/
 │   │   ├── integrations/        # paypal/, make/
-│   │   └── workers/             # outbox dispatcher, reservation expiry
+│   │   └── workers/             # outbox dispatcher (reservation expiry is lazy, ADR-024)
 │   ├── seed/                    # outdoor apparel catalogue + knowledge docs (per language)
 │   └── tests/ † {unit, integration, contract, fixtures}
 ├── frontend/ †
@@ -105,18 +105,21 @@ All money is stored as an **integer in minor units (USD cents) plus an ISO 4217 
 ### 3.1 Cart and reservation service contract (M2, ADR-024)
 The schema enforces the shape of carts and reservations. The cart and reservation services (M2.2) must keep these rules:
 
-Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows committed before it started, and an `UPDATE` that waited for a row lock re-checks its `WHERE` clause against the newly committed row. SQLite allows one writer at a time. Time comes from the injectable clock and is compared in SQL.
+Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows committed before it started, and an `UPDATE` that waited for a row lock re-checks its `WHERE` clause against the newly committed row. SQLite allows one writer at a time; every write transaction starts with an `UPDATE` or `INSERT`, so it holds the write lock before it reads anything it acts on. Time comes from the injectable clock and is compared in SQL.
 
-1. **Cart edits.** Every edit (set quantity, remove a line) first advances `carts.version` (`UPDATE carts SET version = version + 1 … WHERE id = :id`), which takes the cart row lock. **Only after that update** does it look up the cart's active reservation and release it, in the same transaction. Under READ COMMITTED, a reservation committed while the edit waited for the lock is visible to that later lookup. A lookup made before the update could miss it and leave a stale hold.
-2. **Repeated reservation requests.** A reservation request first checks for an **active, unexpired** reservation with `cart_version = carts.version`. If one exists, it is returned unchanged. If the active reservation has `expires_at <= now`, it is expired and released first (rule 7), and the request continues with rule 3.
-3. **New reservations.** Otherwise the request advances the version with a compare-and-set (`UPDATE carts SET version = version + 1 … WHERE id = :id AND version = :seen`) and creates a reservation for the new version.
-4. **Lost races.** If the compare-and-set changes no row, another request won the race. Re-read the cart and its reservation: return the active, unexpired reservation if it matches the current version; otherwise return a conflict.
-5. **Serialise around the cart row.** Cart edits, reservation creation and customer release all serialise on the cart row: the version update takes the row lock on PostgreSQL, and SQLite allows one writer. Cart contents and the active reservation are re-read **after** the lock or version update; a reservation is never built from a snapshot read before it.
-6. **Customer release.** Releasing a reservation on request takes the cart row lock first (as in rule 1), then releases with a compare-and-set on the reservation (`… WHERE id = :id AND status = 'active'`).
-7. **Expiry.** Expiry is a compare-and-set on the reservation: `UPDATE reservations SET status = 'expired', ended_at = :now WHERE id = :id AND status = 'active' AND expires_at <= :now`. **The successful active-to-expired transition and its stock release happen in one transaction.** If the compare-and-set changes no row, the reservation was already released or expired, or isn't due yet, and stock is **not** released again. The same no-row rule applies to customer release.
-8. **Sweeps of other carts.** Expired reservations that belong to *other* carts (for example, those holding variants a new reservation needs) are swept in their own short transactions, one reservation each, **before** the current cart's lock is taken. A request never holds one cart's lock while taking another's, so two carts sweeping each other can't deadlock.
-9. **Release quantities.** Reservation item quantities are the immutable record of what was held. Release and expiry use them; they are never recomputed from the current cart.
+**Global lock order.** A transaction that locks more than one row takes them in this order: **(1) the cart row, (2) the reservation row, (3) variant rows in ascending `variant_id`**. It may skip a level but never goes back to an earlier one. The expiry sweep (rule 8) is the one documented exception: it never locks a cart, only its reservation and then that reservation's variants. No transaction waits for a cart while holding a reservation or variant lock, and variants are always locked in the same order, so these transactions cannot deadlock each other.
+
+1. **Cart edits.** Every edit (set quantity, remove a line) first advances `carts.version` (`UPDATE carts SET version = version + 1 … WHERE id = :id`), which takes the cart row lock. **Only after that update** does it look up the cart's active reservation and end it (rule 7), in the same transaction. Under READ COMMITTED, a reservation committed while the edit waited for the lock is visible to that later lookup. A lookup made before the update could miss it and leave a stale hold.
+2. **Repeated reservation requests.** A reservation request reads the cart's version and its active reservation **in one SQL statement**, so both come from the same snapshot. If the reservation is active, unexpired and has `cart_version = carts.version`, it is returned unchanged and nothing is written.
+3. **The cart's own overdue reservation.** If the active reservation has `expires_at <= now`, it is expired (rule 7) in its **own short transaction, before** the main reservation transaction starts. Expiring it inside the main transaction would lock the reservation and its variants before the cart, the reverse of a concurrent cart edit's order.
+4. **New reservations, atomically.** The main transaction advances the version with a compare-and-set (`UPDATE carts SET version = version + 1 … WHERE id = :id AND version = :seen`), which takes the cart lock. It then re-reads the cart lines and the active reservation, holds every line's variant in ascending order, and writes the reservation, its items and the hold movements. **The version change, every stock hold, the reservation, its items and every movement commit together or not at all.** If any variant can't be held, the whole transaction rolls back; no partial hold or movement is ever committed.
+5. **Lost races.** If the compare-and-set changes no row, another request won the race. Re-read the cart and its reservation (one statement, as in rule 2): return the active, unexpired reservation if it matches the current version; otherwise return a conflict.
+6. **Fresh reads after locking.** Cart edits, reservation creation and customer release all serialise on the cart row. Cart contents and the active reservation are re-read **after** the lock or version update; a reservation is never built from a snapshot read before it. Raw SQL updates bypass the ORM's identity map, so values they write are read back with `RETURNING`, or with `populate_existing()`, and never taken from objects loaded earlier.
+7. **Ending a reservation is a compare-and-set.** Customer release takes the cart row lock first (as in rule 1), then `UPDATE reservations SET status = …, ended_at = :now WHERE id = :id AND status = 'active'`. A release or cart edit that finds the reservation already past `expires_at` records it as **expired** (`reservation_expiry`), not released. Expiry alone is `… WHERE id = :id AND status = 'active' AND expires_at <= :now`. **The successful transition and its stock release happen in one transaction.** If the compare-and-set changes no row, the reservation was already ended, or isn't due yet, and stock is **not** released again. A release request with nothing active succeeds and changes nothing.
+8. **Sweeps.** Overdue reservations of *other* carts (those holding variants that a reservation or availability check needs) are swept **before** the current cart's lock is taken, **one reservation per short transaction**: the reservation's compare-and-set, then its variants in ascending order. The sweep never locks a cart, and a request never holds a cart lock while sweeping.
+9. **Release quantities.** Reservation item quantities are the immutable record of what was held. Release and expiry use them; they are never recomputed from the current cart. A hold requires an active variant and product. A release never does, so stock held on a since-archived variant is always released.
 10. **Stock and audit together.** Every change to `variants.stock_reserved` writes an `inventory_movements` row with the matching `reservation_id` in the same transaction. The services maintain `stock_reserved = SUM(quantity of items in active reservations)`; the schema cannot check a cross-table sum, so the M2 tests assert it.
+11. **Availability checks are advisory.** Setting a cart quantity checks that the quantity is available at that moment, after the cart's own reservation has been ended (rule 1), but holds nothing. Only a reservation holds stock, and availability can change in between. The answer is yes or no; exact counts are never returned (D-5).
 
 ## 4. Key data flows
 
@@ -187,7 +190,7 @@ Transitions happen only in `orders` service functions, guarded by the current st
 
 | Boundary | Trust | Controls |
 |---|---|---|
-| Browser → backend | Untrusted input | Pydantic validation; server recomputes every total; httpOnly SameSite session cookie; rate limit on chat; CSRF protection on admin and checkout mutations |
+| Browser → backend | Untrusted input | Pydantic validation; server recomputes every total; httpOnly SameSite cookies (the cart token is stored only as a SHA-256 hash); rate limit on chat; CSRF protection on cart, checkout and admin mutations (same-origin `Origin` required, cross-site `Sec-Fetch-Site` refused; SameSite is not relied on alone) |
 | Backend → Gemini | Output untrusted; provider sees prompt data | No PII, prices or payment data in prompts; protected values sent as placeholders; schema validation; placeholder validator; timeouts. The LLM has **no write tools** |
 | User text and knowledge docs → LLM | Prompt-injection source | Delimited as data in prompts; injection can at worst produce bad wording, because every effect goes through validated deterministic calls and approval needs a UI click |
 | PayPal → backend | Trusted only after verification | Webhook signature verified via `/v1/notifications/verify-webhook-signature`; capture details re-checked against the snapshot; never trust browser-reported payment status |
