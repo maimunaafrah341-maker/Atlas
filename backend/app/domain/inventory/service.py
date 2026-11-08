@@ -1,4 +1,4 @@
-"""Stock levels and audited stock changes (ARCHITECTURE §3, ADR-009 groundwork).
+"""Stock levels and audited stock changes (ARCHITECTURE §3 and §3.1, ADR-024).
 
 Invariant: available = stock_on_hand - stock_reserved, and it is never negative. Changes use
 a conditional UPDATE: the row changes only if the invariant still holds afterwards. That is
@@ -9,16 +9,19 @@ transaction. Callers own the transaction (commit or roll back).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.domain.catalog.models import Variant
+from app.domain.catalog.models import Product, Variant
 from app.domain.catalog.vocab import StockStatus
-from app.domain.inventory.models import STOCK_ADJUSTMENT_REASONS, InventoryMovement
+from app.domain.inventory.models import RESERVATION_REASONS, STOCK_ADJUSTMENT_REASONS, InventoryMovement
+from app.domain.reservations.models import Reservation, ReservationItem
 from app.errors import AtlasError
 
 
@@ -158,3 +161,167 @@ def movements_for(session: Session, sku: str) -> list[InventoryMovement]:
             .order_by(InventoryMovement.created_at, InventoryMovement.id)
         ).scalars()
     )
+
+
+# --- Reservation holds and releases (M2, ADR-024, ARCHITECTURE §3.1) ------------------------
+#
+# These primitives move only stock_reserved. They read the quantities from reservation_items,
+# so what is held, and later released, is always exactly the reservation's immutable items
+# (§3.1 rule 9). Variant rows are locked in ascending id order, the last step of the global
+# lock order (cart -> reservation -> variants), so concurrent holds and releases can't
+# deadlock. Values are read back with RETURNING, never from ORM objects loaded earlier
+# (rule 6). Neither primitive commits: the caller's transaction also contains the
+# reservation's state change, and must roll back on any exception.
+
+
+class StockShortfall(AtlasError):
+    """One or more variants could not be held. The caller must roll back.
+
+    D-5: no counts. ``variant_ids`` (internal) lists every variant that could not be held, so
+    the reservation service can name all of them, by SKU, in one customer-facing error.
+    """
+
+    status_code = 409
+    code = "insufficient_available_stock"
+
+    def __init__(self, variant_ids: Sequence[int]) -> None:
+        super().__init__("Some items are not available in the requested quantity.")
+        self.variant_ids = tuple(variant_ids)
+
+
+class InventoryInvariantViolation(AtlasError):
+    """A hold or release was asked to do something the reservation rules forbid.
+
+    Reaching this is a bug, not a customer error: it is logged with a reference and the client
+    gets a generic 500. The caller must roll back.
+    """
+
+    status_code = 500
+    code = "inventory_invariant_violation"
+
+
+def _reservation_items(session: Session, reservation_id: int) -> list[tuple[int, int]]:
+    rows = session.execute(
+        select(ReservationItem.variant_id, ReservationItem.quantity)
+        .where(ReservationItem.reservation_id == reservation_id)
+        .order_by(ReservationItem.variant_id)
+    ).all()
+    if not rows:
+        raise InventoryInvariantViolation(f"Reservation {reservation_id} has no items.")
+    return [(variant_id, quantity) for variant_id, quantity in rows]
+
+
+def _reservation_status(session: Session, reservation_id: int) -> str:
+    status = session.execute(select(Reservation.status).where(Reservation.id == reservation_id)).scalar_one_or_none()
+    if status is None:
+        raise InventoryInvariantViolation(f"Reservation {reservation_id} does not exist.")
+    return status
+
+
+def _has_movements(session: Session, reservation_id: int, reasons: Sequence[str]) -> bool:
+    return bool(
+        session.execute(
+            select(
+                exists().where(
+                    InventoryMovement.reservation_id == reservation_id,
+                    InventoryMovement.reason.in_(reasons),
+                )
+            )
+        ).scalar_one()
+    )
+
+
+def hold_reservation_stock(session: Session, reservation_id: int, *, now: datetime) -> None:
+    """Reserve stock for every item of an active, not-yet-held reservation. Does not commit.
+
+    Each variant is held with one conditional UPDATE, in ascending variant id order. A hold
+    needs an active variant of an active product and enough available stock. Every item is
+    attempted, so a shortfall names all the variants that could not be held; the movements are
+    written only when every hold succeeded. On StockShortfall the caller rolls back, which
+    also undoes the holds that did succeed: nothing partial is ever committed.
+    """
+    if _reservation_status(session, reservation_id) != "active":
+        raise InventoryInvariantViolation(f"Reservation {reservation_id} is not active.")
+    if _has_movements(session, reservation_id, RESERVATION_REASONS):
+        raise InventoryInvariantViolation(f"Reservation {reservation_id} already has stock movements.")
+
+    product_is_active = exists().where(Product.id == Variant.product_id, Product.status == "active")
+    short: list[int] = []
+    movements: list[dict[str, Any]] = []
+    for variant_id, quantity in _reservation_items(session, reservation_id):
+        level = session.execute(
+            update(Variant)
+            .where(
+                Variant.id == variant_id,
+                Variant.status == "active",
+                product_is_active,
+                Variant.stock_on_hand - Variant.stock_reserved >= quantity,
+            )
+            .values(stock_reserved=Variant.stock_reserved + quantity, updated_at=now)
+            .returning(Variant.stock_on_hand, Variant.stock_reserved)
+            .execution_options(synchronize_session=False)
+        ).one_or_none()
+        if level is None:
+            short.append(variant_id)
+            continue
+        movements.append(
+            {
+                "variant_id": variant_id,
+                "delta_on_hand": 0,
+                "delta_reserved": quantity,
+                "on_hand_after": level.stock_on_hand,
+                "reserved_after": level.stock_reserved,
+                "reason": "reservation_hold",
+                "reservation_id": reservation_id,
+                "created_at": now,
+            }
+        )
+    if short:
+        raise StockShortfall(short)
+    session.execute(insert(InventoryMovement), movements)
+
+
+def release_reservation_stock(session: Session, reservation_id: int, *, now: datetime) -> None:
+    """Return a just-ended reservation's stock. Does not commit.
+
+    Call only after this transaction's compare-and-set moved the reservation out of
+    ``active`` (§3.1 rule 7). The reason follows the new status: ``expired`` records
+    ``reservation_expiry``, ``released`` records ``reservation_release``. Releases never check
+    variant or product status, so stock held on an archived variant is still returned. A
+    reservation that is still active, was never held, or was already released is refused.
+    """
+    status = _reservation_status(session, reservation_id)
+    if status == "active":
+        raise InventoryInvariantViolation(f"Reservation {reservation_id} is still active.")
+    reason = "reservation_expiry" if status == "expired" else "reservation_release"
+    if not _has_movements(session, reservation_id, ("reservation_hold",)):
+        raise InventoryInvariantViolation(f"Reservation {reservation_id} never held stock.")
+    if _has_movements(session, reservation_id, ("reservation_release", "reservation_expiry")):
+        raise InventoryInvariantViolation(f"Reservation {reservation_id} was already released.")
+
+    movements: list[dict[str, Any]] = []
+    for variant_id, quantity in _reservation_items(session, reservation_id):
+        level = session.execute(
+            update(Variant)
+            .where(Variant.id == variant_id, Variant.stock_reserved >= quantity)
+            .values(stock_reserved=Variant.stock_reserved - quantity, updated_at=now)
+            .returning(Variant.stock_on_hand, Variant.stock_reserved)
+            .execution_options(synchronize_session=False)
+        ).one_or_none()
+        if level is None:
+            raise InventoryInvariantViolation(
+                f"Variant {variant_id} has less reserved stock than reservation {reservation_id} holds."
+            )
+        movements.append(
+            {
+                "variant_id": variant_id,
+                "delta_on_hand": 0,
+                "delta_reserved": -quantity,
+                "on_hand_after": level.stock_on_hand,
+                "reserved_after": level.stock_reserved,
+                "reason": reason,
+                "reservation_id": reservation_id,
+                "created_at": now,
+            }
+        )
+    session.execute(insert(InventoryMovement), movements)
