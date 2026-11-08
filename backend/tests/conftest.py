@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import Environment, Settings, normalize_database_url
-from app.db import create_db_engine
+from app.db import create_db_engine, session_factory
 from app.main import create_app
 from app.migrations import alembic_config
 from app.seed import seed_database
@@ -27,6 +27,9 @@ TEST_DATABASE_URL = normalize_database_url(os.environ.get("TEST_DATABASE_URL", "
 # CI's PostgreSQL job sets this: the run then fails unless every test marked ``postgres`` (the
 # real-concurrency tests) actually ran and passed. A skip there must never look like success.
 REQUIRE_POSTGRES_TESTS = os.environ.get("REQUIRE_POSTGRES_TESTS", "").strip() == "1"
+# At least this many postgres-marked tests must pass, so deleting or unmarking one can't
+# quietly weaken the guard. Raise it whenever concurrency tests are added.
+MIN_POSTGRES_TESTS = 15  # 3 (M1, M2.2 primitives) + 12 (test_reservation_concurrency.py)
 _postgres_outcomes: dict[str, str] = {}
 
 
@@ -41,8 +44,9 @@ def _postgres_guard_problems() -> list[str]:
     problems = []
     if not TEST_DATABASE_URL.startswith("postgresql"):
         problems.append("TEST_DATABASE_URL is not a PostgreSQL URL")
-    if not _postgres_outcomes:
-        problems.append("no PostgreSQL concurrency tests ran")
+    passed = sum(outcome == "passed" for outcome in _postgres_outcomes.values())
+    if passed < MIN_POSTGRES_TESTS:
+        problems.append(f"only {passed} postgres-marked tests passed; at least {MIN_POSTGRES_TESTS} are required")
     problems += [
         f"{nodeid}: {outcome}" for nodeid, outcome in sorted(_postgres_outcomes.items()) if outcome != "passed"
     ]
@@ -57,6 +61,21 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
         terminalreporter.line(f"{passed} postgres-marked tests passed")
         for problem in problems:
             terminalreporter.line(f"FAIL: {problem}", red=True)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # A GitHub annotation, readable through the public checks API without log access:
+            # the run's exact counts and every postgres-marked test that passed.
+            stats = terminalreporter.stats
+            counts = " ".join(f"{key}={len(stats.get(key, []))}" for key in ("passed", "failed", "error", "skipped"))
+            names = ", ".join(
+                nodeid.rsplit("::", 1)[-1]
+                for nodeid in sorted(_postgres_outcomes)
+                if _postgres_outcomes[nodeid] == "passed"
+            )
+            verdict = "OK" if not problems else "FAIL: " + "; ".join(problems)
+            terminalreporter.write_line(
+                f"::notice title=PostgreSQL test results::{counts}; postgres-marked passed={passed} "
+                f"(minimum {MIN_POSTGRES_TESTS}); guard {verdict}; ran: {names}"
+            )
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -108,9 +127,10 @@ def client(migrated_database_url: str) -> Iterator[TestClient]:
 
 
 def open_session(url: str) -> Iterator[Session]:
+    # The project's session factory, so tests get the same rollback-only protection as the app.
     engine = create_db_engine(url)
     try:
-        with Session(engine) as session:
+        with session_factory(engine)() as session:
             yield session
     finally:
         engine.dispose()
