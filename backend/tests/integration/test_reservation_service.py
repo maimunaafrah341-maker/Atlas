@@ -205,6 +205,25 @@ def test_version_mismatch_releases_the_leftover_before_holding(s: Session, clock
     check(s)
 
 
+def test_leftover_on_other_variants_is_released_and_new_lines_held(s: Session, clock: FixedClock) -> None:
+    # D1 path (functional check; the lock-order check is PostgreSQL-only, P11): the leftover
+    # holds A-M (higher id) while the new lines need A-S (lower id). Both variants are locked in
+    # one ascending pass, then the leftover is released and the new lines held.
+    cart_id = cart_with(s, "c1", {"A-M": 1})
+    leftover = reserve(s, cart_id, clock).reservation
+    write(
+        s,
+        update(Cart).where(Cart.id == cart_id).values(version=Cart.version + 1),
+        update(CartItem).where(CartItem.cart_id == cart_id).values(variant_id=variant_ids_of(s, "A-S")[0]),
+    )
+    result = reserve(s, cart_id, clock)
+    assert result.created
+    assert [(item.sku, item.quantity) for item in result.reservation.items] == [("A-S", 1)]
+    assert statuses(s) == {leftover.public_id: "released", result.reservation.public_id: "active"}
+    assert (reserved(s, "A-M"), reserved(s, "A-S")) == (0, 1)
+    check(s)
+
+
 def test_expiry_boundary_is_exact(s: Session, clock: FixedClock) -> None:
     cart_id = cart_with(s, "c1", {"A-S": 1})
     first = reserve(s, cart_id, clock).reservation

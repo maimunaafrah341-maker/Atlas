@@ -138,6 +138,18 @@ Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows 
 - **Sweeps:** both writes sweep overdue reservations of other carts holding the variant before taking the cart lock (bounded by `DEFAULT_SWEEP_LIMIT`; a new cart has nothing to exclude).
 - The cart service ends reservations through the reservation service's own `_end_active_reservation_locked`, so the CASE compare-and-set exists in one place.
 
+**Leftover release and new holds lock variants in one ascending pass (D1, found in the M2.2 audit).** When `reserve_cart`'s main transaction finds a leftover active reservation (one whose `cart_version` no longer matches the cart; the services never create one, but a direct database change can), it releases the leftover's variants and then holds the new lines' variants. Two separate ascending passes could lock variant 9 (release) and then variant 3 (hold), and deadlock against a transaction locking 3 then 9. The main transaction therefore reads and validates the lines first, ends the leftover with its compare-and-set (the reservation lock), then locks the **union** of both variant sets in one ascending `SELECT … FOR NO KEY UPDATE` (the same lock strength the stock updates take, so foreign-key checks are not blocked) before releasing and holding. SQLite omits the clause (single writer).
+
+**M2.2 verification status (working tree after the audit; update when CI runs).**
+
+| Area | Status |
+|---|---|
+| `unit_of_work`, rollback-only transactions, hold/release primitives, reservation service (commits up to `7c43066`) | Implemented; full backend suite passed on SQLite and PostgreSQL 18 in CI (PR #5, run 42469440478) |
+| Cart write service, unchanged-quantity no-op, D1 lock-order fix | Implemented; tested on SQLite only. **Not yet run on PostgreSQL** |
+| Deterministic PostgreSQL concurrency suite (`tests/integration/test_reservation_concurrency.py`, P1–P11 and a deadlock control) | Written; **not yet executed** (no local PostgreSQL could be run; CI runs it on the next push). The CI guard requires at least 15 passing `postgres` tests |
+| Product archived during a concurrent hold | Accepted limitation (documented on `hold_reservation_stock`) |
+| Bounded global sweeper; `/api/cart` endpoints, cookies, CSRF; frontend | Deferred: optional sweeper per ADR-024 D6; HTTP and UI are M2.2 PR 2 / later |
+
 ## 4. Key data flows
 
 ### 4.1 Chat turn (AI proposes, backend decides)

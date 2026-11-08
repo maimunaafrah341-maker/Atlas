@@ -29,7 +29,7 @@ TEST_DATABASE_URL = normalize_database_url(os.environ.get("TEST_DATABASE_URL", "
 REQUIRE_POSTGRES_TESTS = os.environ.get("REQUIRE_POSTGRES_TESTS", "").strip() == "1"
 # At least this many postgres-marked tests must pass, so deleting or unmarking one can't
 # quietly weaken the guard. Raise it whenever concurrency tests are added.
-MIN_POSTGRES_TESTS = 3
+MIN_POSTGRES_TESTS = 15  # 3 (M1, M2.2 primitives) + 12 (test_reservation_concurrency.py)
 _postgres_outcomes: dict[str, str] = {}
 
 
@@ -61,6 +61,21 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
         terminalreporter.line(f"{passed} postgres-marked tests passed")
         for problem in problems:
             terminalreporter.line(f"FAIL: {problem}", red=True)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # A GitHub annotation, readable through the public checks API without log access:
+            # the run's exact counts and every postgres-marked test that passed.
+            stats = terminalreporter.stats
+            counts = " ".join(f"{key}={len(stats.get(key, []))}" for key in ("passed", "failed", "error", "skipped"))
+            names = ", ".join(
+                nodeid.rsplit("::", 1)[-1]
+                for nodeid in sorted(_postgres_outcomes)
+                if _postgres_outcomes[nodeid] == "passed"
+            )
+            verdict = "OK" if not problems else "FAIL: " + "; ".join(problems)
+            terminalreporter.write_line(
+                f"::notice title=PostgreSQL test results::{counts}; postgres-marked passed={passed} "
+                f"(minimum {MIN_POSTGRES_TESTS}); guard {verdict}; ran: {names}"
+            )
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

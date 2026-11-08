@@ -225,12 +225,35 @@ def _lines(session: Session, cart_id: int) -> list[_Line]:
 # --- Ending reservations -------------------------------------------------------------------
 
 
-def _end_active_reservation_locked(session: Session, cart_id: int, now: datetime) -> tuple[int, str] | None:
+def _lock_variants(session: Session, variant_ids: Collection[int]) -> None:
+    """Lock variant rows in ascending id order (PostgreSQL ``FOR NO KEY UPDATE``).
+
+    The same lock strength the stock UPDATEs take, so it never conflicts with the KEY SHARE
+    locks that foreign-key checks take. SQLite has no row locks (one writer); the clause is
+    omitted there.
+    """
+    if variant_ids:
+        session.execute(
+            select(Variant.id)
+            .where(Variant.id.in_(sorted(variant_ids)))
+            .order_by(Variant.id)
+            .with_for_update(key_share=True)
+        ).all()
+
+
+def _end_active_reservation_locked(
+    session: Session, cart_id: int, now: datetime, *, then_hold: Collection[int] = ()
+) -> tuple[int, str] | None:
     """End the cart's active reservation, if any, and release its stock. Caller holds the cart lock.
 
     One compare-and-set decides the outcome atomically: overdue reservations become
     ``expired`` (released with ``reservation_expiry``), others ``released``. No row means
-    nothing was active, so nothing is released. Lock order: reservation, then its variants.
+    nothing was active, so nothing is released. Lock order: reservation, then variants.
+
+    ``then_hold``: variants the same transaction will hold next. They are locked together
+    with the released reservation's variants, in one ascending pass, before the release. Two
+    separate ascending passes (release, then hold) could lock 9 then 3 and deadlock against a
+    concurrent transaction locking 3 then 9.
     Returns (reservation id, new status).
     """
     row = session.execute(
@@ -245,6 +268,11 @@ def _end_active_reservation_locked(session: Session, cart_id: int, now: datetime
     ).one_or_none()
     if row is None:
         return None
+    if then_hold:
+        held = session.execute(
+            select(ReservationItem.variant_id).where(ReservationItem.reservation_id == row.id)
+        ).scalars()
+        _lock_variants(session, set(held) | set(then_hold))
     release_reservation_stock(session, row.id, now=now)
     return row.id, row.status
 
@@ -424,16 +452,17 @@ def _reserve_locked(session: Session, cart_id: int, *, seen: int, now: datetime,
     if version is None:
         raise _LostRace()
 
-    # Requirement: end any leftover active reservation before the first variant hold, so no
-    # variant lock is ever held while waiting for an existing reservation.
-    _end_active_reservation_locked(session, cart_id, now)
-
     lines = _lines(session, cart_id)  # re-read after the lock (rule 6)
     if not lines:
         _fail(session, CartEmpty())
     unavailable = [line.sku for line in lines if not line.available]
     if unavailable:
         _fail(session, CartHasUnavailableItems(unavailable))
+
+    # End any leftover active reservation before the first variant hold, so no variant lock is
+    # ever held while waiting for an existing reservation; its variants and the new lines'
+    # variants are locked in one ascending pass (cart -> reservation -> variants).
+    _end_active_reservation_locked(session, cart_id, now, then_hold=[line.variant_id for line in lines])
 
     reservation_id = session.execute(
         insert(Reservation)
