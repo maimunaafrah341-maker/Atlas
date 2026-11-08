@@ -71,6 +71,8 @@ We track four separate dimensions and never infer one from another:
 ### F4. Variant, inventory and cart validation
 - Every product has variants (SKU, size, colour) with a price in integer minor units, `stock_on_hand` and `stock_reserved`.
 - Cart operations (add, update, remove) run through the cart service, which checks that the variant exists, is active, has enough available stock and stays within quantity limits. Invalid requests return typed errors that the assistant explains in the user's language.
+- The stock check when adding to the cart is **advisory**: it holds nothing, and availability can change before the customer reserves the cart. Only reserving the cart holds stock, for 15 minutes by default (ADR-024). Errors say an item isn't available in that quantity, never how many are left (D-5).
+- A cart line whose product or variant is archived stays in the cart, marked unavailable, and blocks reserving until the customer removes it. Customer selections are never deleted silently.
 - Shipping cost is calculated deterministically from a merchant-configured zone/rate table and the explicit destination country.
 
 ### F5. Merchant knowledge RAG

@@ -36,6 +36,8 @@ jobs:
         working-directory: backend
     env:
       TEST_DATABASE_URL: ${{ matrix.database == 'postgresql' && 'postgresql://atlas:atlas@localhost:5432/atlas_test' || '' }}
+      # Fail the PostgreSQL job if any concurrency test is skipped or none ran (tests/conftest.py).
+      REQUIRE_POSTGRES_TESTS: ${{ matrix.database == 'postgresql' && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
