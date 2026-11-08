@@ -123,6 +123,13 @@ Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows 
 10. **Stock and audit together.** Every change to `variants.stock_reserved` writes an `inventory_movements` row with the matching `reservation_id` in the same transaction. The services maintain `stock_reserved = SUM(quantity of items in active reservations)`; the schema cannot check a cross-table sum, so the M2 tests assert it.
 11. **Availability checks are advisory.** Setting a cart quantity checks that the quantity is available at that moment, after the cart's own reservation has been ended (rule 1), but holds nothing. Only a reservation holds stock, and availability can change in between. The answer is yes or no; exact counts are never returned (D-5).
 
+**Implemented behaviour (M2.2, `app/domain/reservations/service.py`).** These details refine the rules above; the decisions were approved before implementation:
+- **Customer release always advances the cart version** to take the lock, even when nothing turns out to be active (decision B). A reservation request racing a release therefore loses its compare-and-set and gets a conflict. Release locks the cart even past its 30-day expiry, so stock held for a lapsed cart can still be released.
+- **A successful reservation refreshes the cart's 30-day expiry** (decision C), in the same compare-and-set, so a cart with live holds can't lapse. This extends ADR-024 D8 ("30 days after its last change"): reserving counts as a change for expiry. It is rolled back with everything else if the reservation fails.
+- **`active_reservation` can write:** reading an overdue reservation expires it in its own transaction and returns nothing (lazy expiry, D6).
+- **Sweeps** take at most 20 reservations per request (`DEFAULT_SWEEP_LIMIT`), oldest `expires_at` first, and exclude the requesting cart, whose own overdue reservation is handled by rule 3. A sweep failure propagates; the main transaction doesn't start.
+- **The partial unique index backs rule 4's ordering:** a new reservation can't be inserted while the cart's leftover reservation is still active, so ending the leftover first is enforced by the schema as well as the code.
+
 ## 4. Key data flows
 
 ### 4.1 Chat turn (AI proposes, backend decides)
