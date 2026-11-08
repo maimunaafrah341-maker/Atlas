@@ -27,6 +27,9 @@ TEST_DATABASE_URL = normalize_database_url(os.environ.get("TEST_DATABASE_URL", "
 # CI's PostgreSQL job sets this: the run then fails unless every test marked ``postgres`` (the
 # real-concurrency tests) actually ran and passed. A skip there must never look like success.
 REQUIRE_POSTGRES_TESTS = os.environ.get("REQUIRE_POSTGRES_TESTS", "").strip() == "1"
+# At least this many postgres-marked tests must pass, so deleting or unmarking one can't
+# quietly weaken the guard. Raise it whenever concurrency tests are added.
+MIN_POSTGRES_TESTS = 3
 _postgres_outcomes: dict[str, str] = {}
 
 
@@ -41,8 +44,9 @@ def _postgres_guard_problems() -> list[str]:
     problems = []
     if not TEST_DATABASE_URL.startswith("postgresql"):
         problems.append("TEST_DATABASE_URL is not a PostgreSQL URL")
-    if not _postgres_outcomes:
-        problems.append("no PostgreSQL concurrency tests ran")
+    passed = sum(outcome == "passed" for outcome in _postgres_outcomes.values())
+    if passed < MIN_POSTGRES_TESTS:
+        problems.append(f"only {passed} postgres-marked tests passed; at least {MIN_POSTGRES_TESTS} are required")
     problems += [
         f"{nodeid}: {outcome}" for nodeid, outcome in sorted(_postgres_outcomes.items()) if outcome != "passed"
     ]
