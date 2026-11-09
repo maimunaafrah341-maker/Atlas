@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CatalogueLanguageProvider } from "../app/catalogueLanguage.tsx";
 import { routes } from "../app/routes.tsx";
 import type { Variant } from "../lib/api.ts";
-import { errorResponse, jsonResponse, product } from "../test/fixtures.ts";
+import { CATALOGUE, fakeCartServer, type FakeCartServer } from "../test/fakeCartServer.ts";
+import { cartLine, errorResponse, jsonResponse, product, withCart } from "../test/fixtures.ts";
 
 const variant = (size: string, colour: string, stock_status: Variant["stock_status"], amount_minor = 12900): Variant => ({
   sku: `ADO-RRS-${colour.toUpperCase()}-${size}`,
@@ -26,7 +27,7 @@ type Route = (url: string) => Response | Promise<Response>;
 
 function stubApi(productResponse: Route = () => jsonResponse(shell), shipping: Route = () => jsonResponse({})) {
   const fetchMock = vi.fn(async (url: string) => (url.startsWith("/api/shipping/") ? shipping(url) : productResponse(url)));
-  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("fetch", withCart(fetchMock));
   return fetchMock;
 }
 
@@ -148,15 +149,73 @@ describe("product page", () => {
     expect(screen.getByText("Choose a colour to see its availability.")).toBeVisible();
   });
 
-  it("keeps Add to bag clearly unavailable", async () => {
-    const fetchMock = stubApi();
-    renderProduct("/products/ridgeline-rain-shell?size=S&colour=navy");
-    await loaded();
-    const bag = screen.getByRole("button", { name: "Add to bag" });
-    expect(bag).toHaveAttribute("aria-disabled", "true");
-    expect(bag).toHaveAccessibleDescription("Not available yet: the bag isn’t part of this demo, so nothing can be bought.");
-    await userEvent.click(bag);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+  describe("add to bag", () => {
+    // The fake cart server knows these two variants of the test product.
+    CATALOGUE["ADO-RRS-NAVY-S"] = cartLine({ sku: "ADO-RRS-NAVY-S", size: "S" });
+    CATALOGUE["ADO-RRS-NAVY-M"] = cartLine({ sku: "ADO-RRS-NAVY-M", unit_price: { amount_minor: 13900, currency: "USD" } });
+
+    function withServer(url = "/products/ridgeline-rain-shell") {
+      const server = fakeCartServer([], async () => jsonResponse(shell));
+      vi.stubGlobal("fetch", vi.fn(server.fetch));
+      renderProduct(url);
+      return server;
+    }
+    const puts = (server: FakeCartServer) => server.calls.filter((call) => call.startsWith("PUT"));
+    const bagButton = () => screen.getByRole("button", { name: /Add to bag|Adding…/ });
+
+    it("waits for a colour and size, then adds one of the chosen variant", async () => {
+      const server = withServer();
+      await loaded();
+      expect(bagButton()).toHaveAttribute("aria-disabled", "true");
+      expect(bagButton()).toHaveAccessibleDescription("Choose a colour and size first.");
+      await userEvent.click(bagButton());
+      expect(puts(server)).toEqual([]);
+
+      await userEvent.click(group(/^Colour/).getByRole("radio", { name: /Navy/ }));
+      await userEvent.click(group(/^Size/).getByRole("radio", { name: /^S/ }));
+      expect(bagButton()).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(bagButton());
+
+      expect(await screen.findByText(/Added to your bag/)).toBeVisible();
+      expect(screen.getByRole("link", { name: "View bag" })).toHaveAttribute("href", "/bag");
+      expect(screen.getByRole("link", { name: "Bag, 1 item" })).toBeVisible();
+      expect(puts(server)).toEqual(["PUT /api/cart/items/ADO-RRS-NAVY-S?lang=en"]);
+      expect(server.lines.get("ADO-RRS-NAVY-S")?.quantity).toBe(1);
+    });
+
+    it("adds one more when the variant is already in the bag", async () => {
+      const server = withServer("/products/ridgeline-rain-shell?size=M&colour=navy");
+      await loaded();
+      await userEvent.click(bagButton());
+      await screen.findByRole("link", { name: "Bag, 1 item" });
+      await userEvent.click(bagButton());
+      await screen.findByRole("link", { name: "Bag, 2 items" });
+      expect(server.lines.get("ADO-RRS-NAVY-M")?.quantity).toBe(2);
+    });
+
+    it("does not offer an out-of-stock option", async () => {
+      const server = withServer("/products/ridgeline-rain-shell?size=M&colour=red");
+      await loaded();
+      expect(bagButton()).toHaveAttribute("aria-disabled", "true");
+      expect(bagButton()).toHaveAccessibleDescription("This option is out of stock.");
+      await userEvent.click(bagButton());
+      expect(puts(server)).toEqual([]);
+    });
+
+    it("explains a failed add, and retries one that lost its connection", async () => {
+      const server = withServer("/products/ridgeline-rain-shell?size=S&colour=navy");
+      await loaded();
+      server.failNext({ kind: "api", status: 409, code: "insufficient_available_stock", details: [{ sku: "ADO-RRS-NAVY-S" }] });
+      await userEvent.click(bagButton());
+      expect(await screen.findByText("There isn’t enough stock for that quantity.")).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+
+      server.failNext({ kind: "network" }, "PUT");
+      await userEvent.click(bagButton());
+      expect(await screen.findByText(/Could not reach the server/)).toBeVisible();
+      await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(await screen.findByRole("link", { name: "Bag, 1 item" })).toBeVisible();
+    });
   });
 
   it("flags machine-translated text and refetches in a new catalogue language, keeping the selection", async () => {

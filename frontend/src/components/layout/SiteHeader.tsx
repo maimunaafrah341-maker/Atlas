@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import { useCart } from "../../app/cart.tsx";
 import { useCatalogueLanguage } from "../../app/catalogueLanguage.tsx";
 import { CATEGORIES, CATEGORY_LABELS, LANGUAGES, LANGUAGE_NAMES, isLanguage } from "../../lib/catalogue.ts";
 import { Wordmark } from "./Wordmark.tsx";
@@ -49,7 +50,7 @@ export function SiteHeader() {
             <span className="sr-only sm:not-sr-only">Search</span>
           </button>
           <LanguageSelect className="hidden sm:block" />
-          <BagUnavailable />
+          <BagLink />
           <button
             type="button"
             className="flex size-10 items-center justify-center gap-2 text-sm sm:size-auto xl:hidden"
@@ -189,18 +190,29 @@ function LanguageSelect({ className = "" }: { className?: string }) {
   );
 }
 
-/** The bag is shown so the layout is complete, but it is plainly unavailable until the cart API ships. */
-function BagUnavailable() {
+/** The bag link with the server's item count (never computed here). */
+function BagLink() {
+  const { cart } = useCart();
+  const count = cart?.item_count ?? 0;
+  const location = useLocation();
+  const current = location.pathname === "/bag";
   return (
-    <span
-      className="flex items-center gap-1.5 px-1 text-sm whitespace-nowrap text-ink-subtle sm:gap-2 sm:px-0"
-      aria-disabled="true"
-      title="The bag is not available yet"
+    <Link
+      to="/bag"
+      aria-current={current ? "page" : undefined}
+      aria-label={cart ? `Bag, ${count} ${count === 1 ? "item" : "items"}` : "Bag"}
+      className={`flex min-h-10 items-center gap-1.5 px-1 text-sm whitespace-nowrap underline-offset-4 hover:underline sm:gap-2 sm:px-0 ${current ? "underline" : ""}`}
     >
       <span>Bag</span>
-      <span className="label-mono border border-rule px-1 py-0.5 text-[0.625rem] sm:px-1.5">Soon</span>
-      <span className="sr-only">(not available yet)</span>
-    </span>
+      {cart && (
+        <span
+          aria-hidden="true"
+          className={`label-mono min-w-6 px-1.5 py-0.5 text-center text-[0.6875rem] ${count > 0 ? "bg-forest-900 text-on-dark" : "border border-rule text-ink-muted"}`}
+        >
+          {count}
+        </span>
+      )}
+    </Link>
   );
 }
 

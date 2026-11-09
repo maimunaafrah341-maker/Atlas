@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CatalogueLanguageProvider } from "../app/catalogueLanguage.tsx";
 import { routes } from "../app/routes.tsx";
-import { errorResponse, jsonResponse, page, product } from "../test/fixtures.ts";
+import { errorResponse, jsonResponse, page, product, withCart } from "../test/fixtures.ts";
 
 function renderHome() {
   const router = createMemoryRouter(routes, { initialEntries: ["/"] });
@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe("homepage", () => {
   it("links all five real catalogue categories", () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(page([]))));
+    vi.stubGlobal("fetch", withCart(vi.fn(async () => jsonResponse(page([])))));
     renderHome();
     const grid = screen.getByRole("heading", { name: "Equipment, organised by use." }).closest("section") as HTMLElement;
     // Accessible names: the decorative placeholders and arrows are hidden from assistive technology.
@@ -53,7 +53,7 @@ describe("homepage", () => {
 
   it("shows selected equipment from the API: names, prices, stock and translation notes", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(page(products, { total: 20, page_size: 4 })));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withCart(fetchMock));
     window.localStorage.setItem("atlas.catalogueLanguage", "es");
     renderHome();
 
@@ -78,7 +78,7 @@ describe("homepage", () => {
 
   it("refetches in the newly chosen catalogue language", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(page(products)));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withCart(fetchMock));
     renderHome();
     await screen.findByRole("link", { name: "Ridgeline Rain Shell" });
     await userEvent.selectOptions(screen.getAllByRole("combobox", { name: /Catalogue language/ })[0]!, "de");
@@ -92,7 +92,7 @@ describe("homepage", () => {
       .fn()
       .mockResolvedValueOnce(errorResponse(500, "internal_error", "Something went wrong on our side."))
       .mockResolvedValueOnce(jsonResponse(page(products)));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withCart(fetchMock));
     renderHome();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The catalogue couldn’t be loaded.");
@@ -101,13 +101,13 @@ describe("homepage", () => {
   });
 
   it("says so when the catalogue is empty", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(page([]))));
+    vi.stubGlobal("fetch", withCart(vi.fn(async () => jsonResponse(page([])))));
     renderHome();
     expect(await screen.findByText("The catalogue is empty right now.")).toBeVisible();
   });
 
   it("presents the assistant only as a non-functional concept", () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(page([]))));
+    vi.stubGlobal("fetch", withCart(vi.fn(async () => jsonResponse(page([])))));
     renderHome();
     const teaser = screen.getByRole("heading", { name: "A quieter way to find the right equipment." }).closest("section") as HTMLElement;
     expect(teaser).toHaveTextContent("Concept · not available yet");
@@ -118,7 +118,7 @@ describe("homepage", () => {
   });
 
   it("uses neutral placeholders, not images", () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(page([]))));
+    vi.stubGlobal("fetch", withCart(vi.fn(async () => jsonResponse(page([])))));
     renderHome();
     expect(document.querySelectorAll("img")).toHaveLength(0);
   });

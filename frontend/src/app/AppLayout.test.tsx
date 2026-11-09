@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cart, cartLine, jsonResponse, withCart } from "../test/fixtures.ts";
 import { CatalogueLanguageProvider } from "./catalogueLanguage.tsx";
 import { routes } from "./routes.tsx";
 
@@ -19,8 +20,10 @@ function renderAt(path: string) {
 beforeEach(() => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () =>
-      Response.json({ items: [], page: 1, page_size: 4, total: 0, total_pages: 0 }, { status: 200 }),
+    withCart(
+      vi.fn(async () =>
+        Response.json({ items: [], page: 1, page_size: 4, total: 0, total_pages: 0 }, { status: 200 }),
+      ),
     ),
   );
 });
@@ -61,13 +64,18 @@ describe("application shell", () => {
     expect(within(nav).getByRole("link", { name: "Shop all" })).not.toHaveAttribute("aria-current");
   });
 
-  it("shows the bag as unavailable, not as a working control", () => {
+  it("links to the bag with the server's item count", async () => {
+    const body = cart({ lines: [cartLine({ quantity: 2 }), cartLine({ sku: "SOCK-1", quantity: 1 })] });
+    vi.stubGlobal("fetch", withCart(async () => jsonResponse({ items: [], page: 1, page_size: 4, total: 0, total_pages: 0 }), body));
     renderAt("/");
-    const bag = screen.getByText("Bag").parentElement as HTMLElement;
-    expect(bag).toHaveAttribute("aria-disabled", "true");
-    expect(bag).toHaveTextContent(/not available yet/);
-    expect(screen.queryByRole("link", { name: /bag/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /bag/i })).not.toBeInTheDocument();
+    const bag = await screen.findByRole("link", { name: "Bag, 3 items" });
+    expect(bag).toHaveAttribute("href", "/bag");
+    expect(bag).toHaveTextContent("3");
+  });
+
+  it("marks the bag link current on the bag page", async () => {
+    renderAt("/bag");
+    expect(await screen.findByRole("link", { name: "Bag, 0 items" })).toHaveAttribute("aria-current", "page");
   });
 
   it("renders a not-found page for unknown paths", () => {
