@@ -20,7 +20,11 @@ from sqlalchemy.orm import Session
 from app.db import mark_rollback_only, utcnow
 from app.domain.catalog.models import Product, Variant
 from app.domain.catalog.vocab import StockStatus
-from app.domain.inventory.models import RESERVATION_REASONS, STOCK_ADJUSTMENT_REASONS, InventoryMovement
+from app.domain.inventory.models import (
+    RESERVATION_LINKED_REASONS,
+    STOCK_ADJUSTMENT_REASONS,
+    InventoryMovement,
+)
 from app.domain.reservations.models import Reservation, ReservationItem
 from app.errors import AtlasError
 
@@ -255,7 +259,7 @@ def hold_reservation_stock(session: Session, reservation_id: int, *, now: dateti
     """
     if _reservation_status(session, reservation_id) != "active":
         _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} is not active."))
-    if _has_movements(session, reservation_id, RESERVATION_REASONS):
+    if _has_movements(session, reservation_id, RESERVATION_LINKED_REASONS):
         _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} already has stock movements."))
 
     product_is_active = exists().where(Product.id == Variant.product_id, Product.status == "active")
@@ -294,23 +298,35 @@ def hold_reservation_stock(session: Session, reservation_id: int, *, now: dateti
     session.execute(insert(InventoryMovement), movements)
 
 
+# Movements that end a reservation's hold. At most one set per reservation.
+_ENDING_REASONS = ("reservation_release", "reservation_expiry", "sale")
+
+
+def _require_held_and_not_ended(session: Session, reservation_id: int) -> None:
+    if not _has_movements(session, reservation_id, ("reservation_hold",)):
+        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} never held stock."))
+    if _has_movements(session, reservation_id, _ENDING_REASONS):
+        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} was already released or sold."))
+
+
 def release_reservation_stock(session: Session, reservation_id: int, *, now: datetime) -> None:
     """Return a just-ended reservation's stock. Does not commit.
 
-    Call only after this transaction's compare-and-set moved the reservation out of
-    ``active`` (§3.1 rule 7). The reason follows the new status: ``expired`` records
-    ``reservation_expiry``, ``released`` records ``reservation_release``. Releases never check
-    variant or product status, so stock held on an archived variant is still returned. A
-    reservation that is still active, was never held, or was already released is refused.
+    Call only after this transaction's compare-and-set moved the reservation to ``released`` or
+    ``expired`` (§3.1 rule 7), from ``active`` or, for an order's hold (ADR-025), from
+    ``order_hold``. The reason follows the new status: ``expired`` records ``reservation_expiry``,
+    ``released`` records ``reservation_release``. Releases never check variant or product
+    status, so stock held on an archived variant is still returned. A reservation that still
+    holds stock (``active``, ``order_hold``), was sold (``committed``), was never held, or was
+    already released or sold is refused.
     """
     status = _reservation_status(session, reservation_id)
-    if status == "active":
-        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} is still active."))
+    if status in ("active", "order_hold"):
+        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} is still {status}."))
+    if status not in ("released", "expired"):
+        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} is {status}, not released."))
     reason = "reservation_expiry" if status == "expired" else "reservation_release"
-    if not _has_movements(session, reservation_id, ("reservation_hold",)):
-        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} never held stock."))
-    if _has_movements(session, reservation_id, ("reservation_release", "reservation_expiry")):
-        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} was already released."))
+    _require_held_and_not_ended(session, reservation_id)
 
     movements: list[dict[str, Any]] = []
     for variant_id, quantity in _reservation_items(session, reservation_id):
@@ -336,6 +352,56 @@ def release_reservation_stock(session: Session, reservation_id: int, *, now: dat
                 "on_hand_after": level.stock_on_hand,
                 "reserved_after": level.stock_reserved,
                 "reason": reason,
+                "reservation_id": reservation_id,
+                "created_at": now,
+            }
+        )
+    session.execute(insert(InventoryMovement), movements)
+
+
+def commit_reservation_stock(session: Session, reservation_id: int, *, now: datetime) -> None:
+    """Sell a just-committed reservation's stock (M3, ADR-025). Does not commit.
+
+    Call only after this transaction's compare-and-set moved the reservation from
+    ``order_hold`` to ``committed``, which M3.2 does only for a verified, completed payment.
+    Each item lowers both ``stock_on_hand`` and ``stock_reserved`` by its quantity, in ascending
+    variant order, and writes a ``sale`` movement; available stock is unchanged. Like a release
+    it ignores variant and product status. A reservation that is not ``committed``, was never
+    held, or was already released or sold is refused, so stock is never sold twice.
+    """
+    status = _reservation_status(session, reservation_id)
+    if status != "committed":
+        _fail(session, InventoryInvariantViolation(f"Reservation {reservation_id} is {status}, not committed."))
+    _require_held_and_not_ended(session, reservation_id)
+
+    movements: list[dict[str, Any]] = []
+    for variant_id, quantity in _reservation_items(session, reservation_id):
+        level = session.execute(
+            update(Variant)
+            .where(Variant.id == variant_id, Variant.stock_reserved >= quantity, Variant.stock_on_hand >= quantity)
+            .values(
+                stock_on_hand=Variant.stock_on_hand - quantity,
+                stock_reserved=Variant.stock_reserved - quantity,
+                updated_at=now,
+            )
+            .returning(Variant.stock_on_hand, Variant.stock_reserved)
+            .execution_options(synchronize_session=False)
+        ).one_or_none()
+        if level is None:
+            _fail(
+                session,
+                InventoryInvariantViolation(
+                    f"Variant {variant_id} has less reserved stock than reservation {reservation_id} holds."
+                ),
+            )
+        movements.append(
+            {
+                "variant_id": variant_id,
+                "delta_on_hand": -quantity,
+                "delta_reserved": -quantity,
+                "on_hand_after": level.stock_on_hand,
+                "reserved_after": level.stock_reserved,
+                "reason": "sale",
                 "reservation_id": reservation_id,
                 "created_at": now,
             }

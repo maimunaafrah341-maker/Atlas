@@ -13,6 +13,12 @@ Lock order (PostgreSQL, READ COMMITTED):
   before the first variant hold.
 - ``expire_reservation`` (and so ``sweep_overdue``): reservation -> variants. Never a cart.
 - No transaction waits for a cart, or for an existing reservation, while holding variant locks.
+
+Orders (M3.1, ADR-025): while the cart has an open order, ``reserve_cart`` and
+``release_cart_reservation`` are refused with ``checkout_in_progress`` (checked after the cart
+lock, so an order committed meanwhile is seen). A due order is expired first, in its own
+transaction (order -> reservation -> variants, never a cart). Every expiry, release and sweep
+here matches only ``status = 'active'``, so it never ends an order's ``order_hold``.
 """
 
 from __future__ import annotations
@@ -31,6 +37,13 @@ from app.db import mark_rollback_only, unit_of_work
 from app.domain.cart.models import CART_IDLE_LIFETIME, Cart, CartItem
 from app.domain.catalog.models import Product, Variant
 from app.domain.inventory.service import StockShortfall, hold_reservation_stock, release_reservation_stock
+from app.domain.orders.holds import (
+    CheckoutInProgress,
+    expire_due_order_for_cart,
+    open_order_ref,
+    refuse_if_checkout_open,
+    sweep_due_orders,
+)
 from app.domain.reservations.models import Reservation, ReservationItem
 from app.errors import AtlasError
 
@@ -366,8 +379,10 @@ def release_cart_reservation(session: Session, cart_id: int, *, clock: Clock) ->
     and release its stock. An overdue reservation ends as ``expired``. Returns the ended
     reservation, or None when nothing was active or the cart doesn't exist. Repeating it
     never releases stock twice. The cart is locked even past its 30-day expiry, so stock
-    held for an expired cart can still be released.
+    held for an expired cart can still be released. Refused with ``checkout_in_progress``
+    while the cart has an open order: its hold ends only through the order.
     """
+    expire_due_order_for_cart(session, cart_id, clock=clock)
     with unit_of_work(session):
         now = clock.now()
         locked = session.execute(
@@ -379,6 +394,7 @@ def release_cart_reservation(session: Session, cart_id: int, *, clock: Clock) ->
         ).scalar_one_or_none()
         if locked is None:
             return None
+        refuse_if_checkout_open(session, cart_id)
         ended = _end_active_reservation_locked(session, cart_id, now)
         if ended is None:
             return None
@@ -395,11 +411,13 @@ def reserve_cart(
 ) -> ReserveResult:
     """Reserve the cart's current contents for ``ttl`` (ADR-024, §3.1 rules 2-5, 8).
 
+    0. The cart's own due order, if any, is expired in its own transaction; a cart with an
+       open order is refused with ``checkout_in_progress`` (ADR-025), before and after the lock.
     1. Read (one statement): an active, unexpired reservation for the current version is
        returned as is (``created=False``); nothing is written.
     2. The cart's own overdue reservation is expired in its own transaction.
-    3. Overdue reservations of other carts holding these variants are swept, one per
-       transaction, before the cart lock.
+    3. Overdue reservations, and due orders' holds (ADR-025), of other carts holding these
+       variants are swept, one per transaction, before the cart lock.
     4. Main transaction: version compare-and-set (cart lock; also refreshes the cart's 30-day
        expiry, decision C), end any leftover active reservation **before** the first variant
        hold, re-read the lines, reject empty or unavailable carts, insert the reservation and
@@ -411,9 +429,13 @@ def reserve_cart(
     if ttl <= timedelta(0):
         raise ValueError("ttl must be positive")
 
+    expire_due_order_for_cart(session, cart_id, clock=clock)
     with unit_of_work(session):
         now = clock.now()
         state = _cart_state(session, cart_id, now)
+        checkout = open_order_ref(session, cart_id)
+        if checkout is not None:
+            raise CheckoutInProgress(checkout)  # nothing written
         matching = state.matching_reservation(now)
         if matching is not None:
             return ReserveResult(_view(session, matching), created=False)
@@ -423,6 +445,7 @@ def reserve_cart(
     if overdue is not None:
         expire_reservation(session, overdue, clock=clock)
     sweep_overdue(session, variant_ids=variant_ids, exclude_cart_id=cart_id, clock=clock, limit=sweep_limit)
+    sweep_due_orders(session, variant_ids=variant_ids, exclude_cart_id=cart_id, clock=clock, limit=sweep_limit)
 
     try:
         with unit_of_work(session):
@@ -451,6 +474,7 @@ def _reserve_locked(session: Session, cart_id: int, *, seen: int, now: datetime,
     ).scalar_one_or_none()
     if version is None:
         raise _LostRace()
+    refuse_if_checkout_open(session, cart_id)
 
     lines = _lines(session, cart_id)  # re-read after the lock (rule 6)
     if not lines:

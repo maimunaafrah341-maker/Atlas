@@ -29,8 +29,8 @@ M1_TABLES = {
 }
 
 
-def test_head_is_m2_cart_migration() -> None:
-    assert head_revision() == "0003_cart_reservations"
+def test_head_is_m3_orders_migration() -> None:
+    assert head_revision() == "0004_orders"
 
 
 def test_models_match_migrated_schema(db_session: Session) -> None:

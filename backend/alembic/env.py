@@ -47,13 +47,36 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _sqlite_foreign_keys(connection: Connection, *, enabled: bool) -> None:
+    # Only effective outside a transaction, so it is set before the migration transaction starts
+    # and restored after it ends.
+    connection.exec_driver_sql(f"PRAGMA foreign_keys={'ON' if enabled else 'OFF'}")
+    connection.commit()
+
+
 def run_migrations_online() -> None:
     engine = create_db_engine(_database_url())
     try:
         with engine.connect() as connection:
-            _configure(connection)
-            with context.begin_transaction():
-                context.run_migrations()
+            sqlite = connection.dialect.name == "sqlite"
+            if sqlite:
+                # Batch mode rebuilds a table by creating a copy, dropping the original and
+                # renaming the copy. SQLite refuses to drop a table that other tables reference
+                # (an implicit DELETE that RESTRICT foreign keys reject) unless foreign keys are
+                # off, so they are off for the migration and every reference is checked before
+                # the transaction commits (SQLite's documented ALTER TABLE procedure).
+                _sqlite_foreign_keys(connection, enabled=False)
+            try:
+                _configure(connection)
+                with context.begin_transaction():
+                    context.run_migrations()
+                    if sqlite:
+                        violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+                        if violations:
+                            raise RuntimeError(f"migration left {len(violations)} foreign key violation(s)")
+            finally:
+                if sqlite:
+                    _sqlite_foreign_keys(connection, enabled=True)
     finally:
         engine.dispose()
 

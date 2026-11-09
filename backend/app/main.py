@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.models  # noqa: F401  (register every table, so all foreign keys resolve in a fresh process)
-from app.api import cart, catalog, health, shipping
+from app.api import cart, catalog, checkout, health, shipping
 from app.clock import Clock, SystemClock
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
@@ -79,6 +79,8 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     app.include_router(catalog.router)
     app.include_router(shipping.router)
     app.include_router(cart.router)
+    app.include_router(checkout.router)
+    app.include_router(checkout.config_router)
 
     dist = settings.frontend_dist_dir
     if dist is not None and (dist / "index.html").is_file():

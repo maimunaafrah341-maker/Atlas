@@ -7,10 +7,15 @@ quantities from the current cart. Reservations carry no prices; price snapshots 
 the M3 order (D1).
 
 Lifecycle: ``active`` -> ``released`` (customer release, or any cart edit, D2) or ``expired``
-(TTL passed; applied lazily, D6). Both end states are final. Every hold, release and expiry
-writes inventory_movements rows, linked by ``reservation_id``, in the same transaction as the
-change to variants.stock_reserved. Reservations and their items are audit history: they are
-never deleted, which is why every foreign key into or out of these tables is RESTRICT.
+(TTL passed; applied lazily, D6). M3 (ADR-025): creating an order adopts the active reservation
+as ``order_hold``; it then ends only through its order, as ``committed`` (verified payment,
+M3.2), ``released`` (cancellation or definitive payment failure) or ``expired`` (the order's
+hold deadline passed before capture). Cart-side expiry, release and sweeps match only
+``active``, so they can never end an ``order_hold``. ``committed``, ``released`` and ``expired``
+are final. Every hold, release, expiry and sale writes inventory_movements rows, linked by
+``reservation_id``, in the same transaction as the change to the variant's stock.
+Reservations and their items are audit history: they are never deleted, which is why every
+foreign key into or out of these tables is RESTRICT.
 
 A cart has at most one active reservation (partial unique index, SQLite and PostgreSQL), and
 ``cart_version`` records the cart version it was made for.
@@ -27,7 +32,9 @@ from app.db import Base, UTCDateTime
 from app.domain.cart.models import MAX_QUANTITY_PER_LINE
 from app.domain.catalog.vocab import sql_in
 
-RESERVATION_STATUSES: tuple[str, ...] = ("active", "released", "expired")
+RESERVATION_STATUSES: tuple[str, ...] = ("active", "order_hold", "committed", "released", "expired")
+# Statuses that still hold stock (counted in variants.stock_reserved) and have not ended.
+HOLDING_STATUSES: tuple[str, ...] = ("active", "order_hold")
 PUBLIC_ID_LENGTH = 32  # uuid4().hex
 
 ACTIVE_ONLY = text("status = 'active'")
@@ -54,9 +61,10 @@ class Reservation(Base):
         CheckConstraint(f"length(public_id) = {PUBLIC_ID_LENGTH}", name="public_id_length"),
         CheckConstraint("cart_version >= 0", name="cart_version_non_negative"),
         CheckConstraint("expires_at > created_at", name="expires_after_creation"),
-        # Active reservations have not ended; ended ones record when.
+        # Holding reservations have not ended; ended ones record when.
         CheckConstraint(
-            "(status = 'active' AND ended_at IS NULL) OR (status <> 'active' AND ended_at IS NOT NULL)",
+            f"({sql_in('status', HOLDING_STATUSES)} AND ended_at IS NULL)"
+            f" OR (status NOT IN ('active', 'order_hold') AND ended_at IS NOT NULL)",
             name="ended_at_matches_status",
         ),
         Index(

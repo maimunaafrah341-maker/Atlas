@@ -113,6 +113,7 @@ def test_get_without_cookie_is_an_empty_cart_and_creates_nothing(api: TestClient
         "subtotal": {"amount_minor": 0, "currency": "USD"},
         "expires_at": None,
         "reservation": None,
+        "checkout": None,
     }
     assert set_cookie_headers(response) == []
     assert cart_count(db) == 0
@@ -219,7 +220,8 @@ def test_cart_response_lines_names_and_totals(api: TestClient) -> None:
     put(api, "SHELL-M", 2)
     response = put(api, "SOCK-M", 3)
     body = response.json()
-    assert set(body) == {"lines", "item_count", "subtotal", "expires_at", "reservation"}
+    assert set(body) == {"lines", "item_count", "subtotal", "expires_at", "reservation", "checkout"}
+    assert body["checkout"] is None
     assert body["lines"] == [
         {
             "sku": "SHELL-M",
