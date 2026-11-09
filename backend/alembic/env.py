@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
+from typing import Any
 
 from alembic import context
-from sqlalchemy import Connection
+from sqlalchemy import Connection, Engine, event
 
 import app.models  # noqa: F401  (registers every table on Base.metadata)
 from app.config import get_settings
@@ -26,13 +27,23 @@ def _database_url() -> str:
     return str(url) if url else get_settings().database_url
 
 
+def _check_sqlite_foreign_keys(ctx: Any, **_kwargs: Any) -> None:
+    """After each revision, inside its transaction and before its commit (``on_version_apply``):
+    refuse to commit a revision that leaves a dangling reference. Raising rolls it back."""
+    violations = ctx.connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError(f"migration left {len(violations)} foreign key violation(s)")
+
+
 def _configure(connection: Connection) -> None:
+    sqlite = connection.dialect.name == "sqlite"
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
         # SQLite cannot ALTER most constraints in place; batch mode recreates tables safely.
-        render_as_batch=connection.dialect.name == "sqlite",
+        render_as_batch=sqlite,
         compare_type=True,
+        on_version_apply=[_check_sqlite_foreign_keys] if sqlite else [],
     )
 
 
@@ -47,36 +58,52 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def _sqlite_foreign_keys(connection: Connection, *, enabled: bool) -> None:
-    # Only effective outside a transaction, so it is set before the migration transaction starts
-    # and restored after it ends.
-    connection.exec_driver_sql(f"PRAGMA foreign_keys={'ON' if enabled else 'OFF'}")
-    connection.commit()
+def _prepare_sqlite_migration_engine(engine: Engine) -> None:
+    """Make each SQLite revision one real transaction, with foreign keys off during it.
+
+    Batch mode rebuilds a table by creating a copy, dropping the original and renaming the copy.
+    SQLite refuses to drop a table that other tables reference (an implicit DELETE that RESTRICT
+    foreign keys reject) unless foreign keys are off, and that pragma only takes effect outside a
+    transaction. Python's sqlite3 driver would also open its transaction only at the first data
+    statement, autocommitting the DDL before it. So, on this migration-only engine (SQLAlchemy's
+    documented pysqlite recipe): the driver never opens transactions itself, SQLAlchemy emits
+    BEGIN, and foreign keys are switched off on the raw connection before any transaction.
+    Every reference is checked before each revision commits (``_check_sqlite_foreign_keys``),
+    and enforcement is switched back on before the connection is released (SQLite's documented
+    ALTER TABLE procedure).
+    """
+
+    @event.listens_for(engine, "connect")
+    def _manual_transactions(dbapi_connection: Any, _record: Any) -> None:
+        # Runs after create_db_engine's own connect hook (which turned foreign keys on).
+        dbapi_connection.isolation_level = None
+        dbapi_connection.execute("PRAGMA foreign_keys=OFF")
+
+    @event.listens_for(engine, "begin")
+    def _begin(connection: Connection) -> None:
+        connection.exec_driver_sql("BEGIN")
+
+
+def _restore_sqlite_foreign_keys(connection: Connection) -> None:
+    if connection.in_transaction():
+        connection.rollback()  # never commit leftovers; each revision committed (or not) itself
+    connection.connection.driver_connection.execute("PRAGMA foreign_keys=ON")  # type: ignore[union-attr]
 
 
 def run_migrations_online() -> None:
     engine = create_db_engine(_database_url())
+    sqlite = engine.dialect.name == "sqlite"
+    if sqlite:
+        _prepare_sqlite_migration_engine(engine)
     try:
         with engine.connect() as connection:
-            sqlite = connection.dialect.name == "sqlite"
-            if sqlite:
-                # Batch mode rebuilds a table by creating a copy, dropping the original and
-                # renaming the copy. SQLite refuses to drop a table that other tables reference
-                # (an implicit DELETE that RESTRICT foreign keys reject) unless foreign keys are
-                # off, so they are off for the migration and every reference is checked before
-                # the transaction commits (SQLite's documented ALTER TABLE procedure).
-                _sqlite_foreign_keys(connection, enabled=False)
             try:
                 _configure(connection)
                 with context.begin_transaction():
                     context.run_migrations()
-                    if sqlite:
-                        violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
-                        if violations:
-                            raise RuntimeError(f"migration left {len(violations)} foreign key violation(s)")
             finally:
                 if sqlite:
-                    _sqlite_foreign_keys(connection, enabled=True)
+                    _restore_sqlite_foreign_keys(connection)
     finally:
         engine.dispose()
 

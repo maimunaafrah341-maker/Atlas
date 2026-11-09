@@ -179,7 +179,7 @@ Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows 
 | `POST /api/cart/orders/{ref}/cancel` | `cancel_order` | 200, idempotent; past the deadline it records `expired`. 409 `payment_in_progress` or `order_not_cancellable` |
 | `GET /api/checkout/config` | none | `{"payments_enabled": false}` until M3.2 |
 
-Order responses carry the reference, status, `version_hash`, lines (live names in the requested language; prices from the snapshot), totals, shipping and `hold_expires_at`; never internal ids or stock counts. `GET /api/cart` adds `checkout: {order_ref, status} | null`. Changes are same-origin checked and every response is `no-store` (under `/api/cart`). SQLite migrations run with foreign keys off and a `PRAGMA foreign_key_check` before commit (`alembic/env.py`), because batch mode rebuilds referenced tables.
+Order responses carry the reference, status, `version_hash`, lines (live names in the requested language; prices from the snapshot), totals, shipping and `hold_expires_at`; never internal ids or stock counts. `GET /api/cart` adds `checkout: {order_ref, status} | null`. Changes are same-origin checked and every response is `no-store` (under `/api/cart`). SQLite migrations run each revision in one real transaction (explicit `BEGIN`, so batch-mode DDL rolls back too), with foreign keys off and a `PRAGMA foreign_key_check` before each revision commits; enforcement is switched back on before the connection is released (`alembic/env.py`), because batch mode rebuilds referenced tables.
 
 ## 4. Key data flows
 

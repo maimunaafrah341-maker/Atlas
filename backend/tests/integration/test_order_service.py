@@ -358,6 +358,36 @@ def test_another_cart_sweeps_an_abandoned_order(s: Session, clock: FixedClock) -
     assert stock(s, "A-M") == (2, 2)
 
 
+def test_order_sweep_is_bounded_skips_the_caller_and_never_releases_twice(
+    s: Session, factory: sessionmaker[Session], clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.orders import holds
+
+    refs = [order_for(s, cart_with(s, clock, {"C-M": 1}), clock).order.public_ref for _ in range(4)]
+    carts = [order_row(s, ref).cart_id for ref in refs]
+    late = FixedClock(NOW + HOLD)
+    c_m = [variant_id(s, "C-M")]
+
+    # Bounded, and the requesting cart's own order is excluded (it has its own lazy expiry).
+    assert sweep_due_orders(s, variant_ids=c_m, exclude_cart_id=carts[0], clock=late, limit=2) == 2
+    assert [order_row(s, ref).status for ref in refs] == ["pending_approval", "expired", "expired", "pending_approval"]
+
+    # A candidate that is cancelled between the sweep's read and its compare-and-set is skipped:
+    # its stock is released once, by the cancellation.
+    real = holds.expire_order_if_due
+
+    def cancelled_meanwhile(session: Session, order_id: int, *, clock: FixedClock) -> bool:
+        with factory() as other:
+            cancel_order(other, carts[3], refs[3], clock=clock)
+        return real(session, order_id, clock=clock)
+
+    monkeypatch.setattr(holds, "expire_order_if_due", cancelled_meanwhile)
+    assert sweep_due_orders(s, variant_ids=c_m, exclude_cart_id=carts[0], clock=late) == 0
+    assert order_row(s, refs[3]).status == "expired"  # cancel past the deadline records expiry
+    assert reasons(s).count("reservation_expiry") == 3  # orders 1, 2 and 3: once each
+    assert stock(s, "C-M") == (4, 1)  # only order 0's hold remains
+
+
 @pytest.mark.parametrize("status", ["capturing", "payment_pending", "needs_review"])
 def test_payment_in_progress_keeps_the_hold(s: Session, clock: FixedClock, status: str) -> None:
     cart_id = cart_with(s, clock, {"A-S": 1})

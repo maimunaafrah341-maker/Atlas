@@ -1,7 +1,14 @@
+import sqlite3
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
 import pytest
 from alembic import command
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.pool import Pool
 
 from app.db import create_db_engine
 from app.migrations import alembic_config, current_revision, head_revision
@@ -423,3 +430,79 @@ def test_downgrade_0004_without_orders_restores_0003(database_url: str) -> None:
     command.upgrade(config, "head")
     assert revision_of(database_url) == head_revision()
     assert _reservation_rows(database_url) == reservations
+
+
+# --- SQLite migrations: foreign keys off only inside the migration (alembic/env.py) -------------
+
+
+@pytest.fixture
+def sqlite_url(tmp_path: Path) -> str:
+    return f"sqlite:///{(tmp_path / 'fk.db').as_posix()}"
+
+
+@pytest.fixture
+def migration_fk_states() -> Iterator[list[int]]:
+    """``PRAGMA foreign_keys`` of every pooled connection as it is checked back in."""
+    states: list[int] = []
+
+    def record(dbapi_connection: Any, _record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            states.append(cursor.execute("PRAGMA foreign_keys").fetchone()[0])
+        finally:
+            cursor.close()
+
+    event.listen(Pool, "checkin", record)
+    yield states
+    event.remove(Pool, "checkin", record)
+
+
+def _orphan_item_rejected(url: str) -> None:
+    with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+        _execute(
+            url,
+            "INSERT INTO reservation_items (reservation_id, variant_id, quantity) VALUES (888888, 888888, 1)",
+        )
+
+
+def test_sqlite_upgrade_through_0004_leaves_foreign_keys_enforced(
+    sqlite_url: str, migration_fk_states: list[int]
+) -> None:
+    config = alembic_config(sqlite_url)
+    command.upgrade(config, M2_HEAD)
+    _seed_m1_stock(sqlite_url)
+    _hold_stock(sqlite_url)  # rows that reference reservations, so 0004's rebuild needs FKs off
+    migration_fk_states.clear()
+
+    command.upgrade(config, "0004_orders")
+
+    assert migration_fk_states, "no migration connection was checked in"
+    assert set(migration_fk_states) == {1}  # restored before the connection went back to the pool
+    _orphan_item_rejected(sqlite_url)  # and enforced on fresh connections
+
+
+def test_sqlite_foreign_key_check_fails_the_migration_and_still_restores_enforcement(
+    sqlite_url: str, migration_fk_states: list[int]
+) -> None:
+    config = alembic_config(sqlite_url)
+    command.upgrade(config, M2_HEAD)
+    with sqlite3.connect(make_url(sqlite_url).database) as raw:  # an orphan, written with FKs off
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute("INSERT INTO reservation_items (reservation_id, variant_id, quantity) VALUES (999999, 999999, 1)")
+    raw.close()
+    migration_fk_states.clear()
+
+    with pytest.raises(RuntimeError, match="foreign key violation"):
+        command.upgrade(config, "0004_orders")
+
+    assert migration_fk_states
+    assert set(migration_fk_states) == {1}
+    # The whole revision rolled back: not recorded, no half-built scratch tables, 0003 schema intact.
+    assert revision_of(sqlite_url) == M2_HEAD
+    tables = MovementSchema(sqlite_url).tables
+    assert not {name for name in tables if name.startswith("_alembic_tmp")}
+    assert not tables & M3_TABLES
+    assert _checks(sqlite_url, "reservations") == RESERVATION_CHECKS
+    [(definition,)] = _rows(sqlite_url, "SELECT sql FROM sqlite_master WHERE name = 'reservations'")
+    assert "order_hold" not in str(definition)  # the 0003 table, not the rebuilt one
+    _orphan_item_rejected(sqlite_url)
