@@ -12,7 +12,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.models  # noqa: F401  (register every table, so all foreign keys resolve in a fresh process)
-from app.api import catalog, health, shipping
+from app.api import cart, catalog, health, shipping
+from app.clock import Clock, SystemClock
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
 from app.errors import install_error_handlers
@@ -43,7 +44,7 @@ def _mount_spa(app: FastAPI, dist: Path) -> None:
         return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, clock: Clock | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     engine = create_db_engine(settings.database_url)
@@ -68,6 +69,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.sessions = session_factory(engine)
+    # The cart and reservation services compare times in SQL against this clock (tests inject one).
+    app.state.clock = clock or SystemClock()
 
     # Outermost: security headers on every response, and the last-resort JSON 500.
     app.add_middleware(SafetyMiddleware)
@@ -75,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(catalog.router)
     app.include_router(shipping.router)
+    app.include_router(cart.router)
 
     dist = settings.frontend_dist_dir
     if dist is not None and (dist / "index.html").is_file():

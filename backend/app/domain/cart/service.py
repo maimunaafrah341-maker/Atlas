@@ -35,6 +35,8 @@ from app.clock import Clock
 from app.db import mark_rollback_only, unit_of_work
 from app.domain.cart.models import CART_IDLE_LIFETIME, MAX_CART_LINES, MAX_QUANTITY_PER_LINE, Cart, CartItem
 from app.domain.catalog.models import Product, Variant
+from app.domain.catalog.service import ProductName, product_names
+from app.domain.catalog.vocab import Language
 from app.domain.inventory.service import InsufficientAvailableStock, InvalidQuantity, VariantInactive, VariantNotFound
 from app.domain.reservations.models import Reservation
 from app.domain.reservations.service import (
@@ -180,6 +182,22 @@ def _cart_view(session: Session, cart_id: int) -> CartView:
             for row in rows
         ),
     )
+
+
+@dataclass(frozen=True)
+class NamedCart:
+    cart: CartView
+    names: dict[str, ProductName]  # by product slug, in the requested language
+
+
+def read_cart(session: Session, cart_id: int, *, lang: Language) -> NamedCart:
+    """The cart's lines with live prices and product names in ``lang``, in one read-only
+    transaction. Never changes the cart's version or expiry, and never touches reservations.
+    """
+    with unit_of_work(session):
+        view = _cart_view(session, cart_id)
+        names = product_names(session, {line.product_slug for line in view.lines}, lang)
+    return NamedCart(cart=view, names=names)
 
 
 def _line_quantity(session: Session, cart_id: int, sku: str) -> int | None:

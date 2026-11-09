@@ -101,8 +101,8 @@ jobs:
             -e DATABASE_URL=postgresql://atlas:atlas@localhost:5432/atlas \
             -e RENDER_GIT_COMMIT=${{ github.sha }} \
             atlas:ci
-      - name: Smoke test
-        run: python scripts/smoke_test.py http://127.0.0.1:8000 --expect-dialect postgresql --wake-timeout 60
+      - name: Smoke test (with the cart API; local container only, never production)
+        run: python scripts/smoke_test.py http://127.0.0.1:8000 --expect-dialect postgresql --wake-timeout 60 --cart
       - name: Restart container (re-runs migrations and the idempotent seed)
         run: |
           docker restart atlas
