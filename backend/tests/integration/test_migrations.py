@@ -392,7 +392,7 @@ def test_0004_accepts_a_balanced_linked_sale(database_url: str) -> None:
 
 def test_downgrade_refuses_when_order_history_exists(database_url: str) -> None:
     config = alembic_config(database_url)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0004_orders")  # 0004 on its own; 0005 has its own tests
     _seed_m1_stock(database_url)
     _hold_stock(database_url)
     _execute(database_url, ADOPT)

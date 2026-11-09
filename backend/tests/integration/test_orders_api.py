@@ -247,4 +247,9 @@ def test_requests_without_an_origin_are_refused(shop_url: str, clock: FixedClock
 def test_checkout_config_reports_payments_disabled(api: TestClient) -> None:
     response = api.get("/api/checkout/config")
     assert response.status_code == 200
-    assert response.json() == {"payments_enabled": False}
+    assert response.json() == {
+        "payments_enabled": False,
+        "paypal_client_id": None,
+        "currency": "USD",
+        "intent": "capture",
+    }
