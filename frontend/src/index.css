@@ -1,9 +1,72 @@
 @import "tailwindcss";
 
+/*
+ * Atlas design tokens (Concept C, photos/Screenshot 2026-11-08 *.png).
+ * Colours were sampled from the reference screenshots; names describe roles, not hues.
+ */
+@theme {
+  --font-display: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* Surfaces */
+  --color-paper: #f2efe7; /* page background */
+  --color-paper-raised: #f8f6f0; /* raised panels */
+  --color-forest-950: #15251e; /* announcement bar, footer, dark bands */
+  --color-forest-900: #20372d; /* primary buttons, badges */
+  --color-forest-800: #26352e; /* secondary dark panel */
+  --color-forest-600: #43584e; /* image placeholder on dark */
+
+  /* Text and rules */
+  --color-ink: #1a1e1b;
+  --color-ink-muted: #545b56;
+  --color-ink-subtle: #6f746f;
+  --color-rule: #d8d3c6;
+  --color-on-dark: #f2efe7;
+  --color-on-dark-muted: #b4bcb6;
+
+  /* Restrained category tints */
+  --color-tint-stone: #dfe0dc;
+  --color-tint-sage: #b9bba5;
+  --color-tint-clay: #c9a08a;
+  --color-tint-sand: #d8d4c9;
+  --color-tint-moss: #c4c7b4;
+
+  /* Status (stock and errors) — muted, in keeping with the palette */
+  --color-ok: #3f6b4f;
+  --color-warn: #8a5a1f;
+  --color-alert: #9b3b2a;
+}
+
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 body {
-  @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100;
+  @apply bg-paper font-sans text-ink antialiased;
+}
+
+/* Small uppercase monospace labels used throughout Concept C. */
+@utility label-mono {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* One visible, consistent focus ring on every interactive element. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-forest-900);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

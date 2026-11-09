@@ -29,14 +29,14 @@ export function HealthStatus() {
   return (
     <section
       aria-labelledby="system-status"
-      className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-800 dark:bg-stone-900"
+      className="border border-rule bg-paper-raised p-6"
     >
-      <h2 id="system-status" className="text-lg font-semibold">
-        System status
+      <h2 id="system-status" className="label-mono text-ink-muted">
+        Live check
       </h2>
       <div aria-live="polite" className="mt-3">
         {state.kind === "loading" && (
-          <div className="text-stone-600 dark:text-stone-400">
+          <div className="text-ink-muted">
             <p>Checking the backend…</p>
             <p className="mt-1 text-sm">If the server was asleep, this can take up to a minute.</p>
           </div>
@@ -44,7 +44,7 @@ export function HealthStatus() {
 
         {state.kind === "error" && (
           <div role="alert" className="flex flex-wrap items-center gap-3">
-            <p className="text-red-700 dark:text-red-400">{state.message}</p>
+            <p className="text-alert">{state.message}</p>
             <RetryButton onClick={retry} />
           </div>
         )}
@@ -63,21 +63,21 @@ function Report({ report, onRetry }: { report: HealthReport; onRetry: () => void
       <p className="flex items-center gap-2 font-medium">
         <span
           aria-hidden="true"
-          className={`inline-block size-2.5 rounded-full ${healthy ? "bg-emerald-500" : "bg-amber-500"}`}
+          className={`inline-block size-2.5 rounded-full ${healthy ? "bg-ok" : "bg-warn"}`}
         />
         {healthy ? "Backend and database operational" : "Degraded: the database is unavailable or not migrated"}
       </p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        <dt className="text-stone-500">Version</dt>
+        <dt className="text-ink-subtle">Version</dt>
         <dd className="font-mono">{report.version}</dd>
-        <dt className="text-stone-500">Environment</dt>
+        <dt className="text-ink-subtle">Environment</dt>
         <dd>{report.environment}</dd>
-        <dt className="text-stone-500">Database</dt>
+        <dt className="text-ink-subtle">Database</dt>
         <dd>
           {database.dialect} · {database.status}
           {database.latency_ms !== null && ` · ${database.latency_ms} ms`}
         </dd>
-        <dt className="text-stone-500">Schema</dt>
+        <dt className="text-ink-subtle">Schema</dt>
         <dd>{database.schema_up_to_date ? `up to date (${database.migration_revision})` : "not at latest migration"}</dd>
       </dl>
       {!healthy && <RetryButton onClick={onRetry} />}
@@ -90,7 +90,7 @@ function RetryButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="rounded-md border border-stone-300 px-3 py-1.5 text-sm font-medium hover:bg-stone-100 focus-visible:outline-2 focus-visible:outline-teal-600 dark:border-stone-700 dark:hover:bg-stone-800"
+      className="border border-ink px-4 py-2 text-sm hover:bg-ink hover:text-paper"
     >
       Try again
     </button>
