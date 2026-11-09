@@ -96,7 +96,7 @@ All money is stored as an **integer in minor units (USD cents) plus an ISO 4217 
 | `carts` / `cart_items` | token_hash, version, created_at, updated_at, expires_at · variant_id, qty (1–10) | Anonymous cart identified by a cookie token, stored hashed (ADR-024). `version` serialises edits and reservations (§3.1). No prices stored; expires 30 days after the last change |
 | `orders` (M3.1) | public_ref, cart_id, reservation_id (unique), status, version_hash, currency, subtotal/shipping/total_minor, ship_country, shipping_zone, lang, hold_expires_at | State machine §5; adopts the cart's reservation (ADR-025); at most one open order per cart |
 | `order_items` (M3.1) | order_id, variant_id, sku, product_slug, name_snapshot, size, colour, unit_price_minor, qty, line_total_minor | **Immutable** snapshot |
-| `payments` | order_id, paypal_order_id, capture_id, status, amount_minor, currency, raw (redacted) | |
+| `payments` (M3.2) | order_id, paypal_order_id, capture_id, status, status_reason, amount_minor, currency, invoice_id, related_order_id, payee_merchant_id, verification, problem, source, debug_id | Evidence read back from PayPal's capture record, unique per (capture, status). No raw bodies, no payer data (ADR-026) |
 | `paypal_webhook_events` | event_id **UNIQUE**, type, verified, processed_at | Dedup key |
 | `outbox_events` | id (UUID = idempotency key), type, payload, status, attempts, max_attempts, next_attempt_at, lease_until, last_error, created_at, delivered_at | §4.3 |
 | `automation_deliveries` / `automation_callbacks` | event_id, attempt, http_status, duration_ms, error · event_id, make_status, detail | History view |
@@ -239,12 +239,30 @@ An event is claimed only if this update changes exactly one row.
 ## 5. Order state machine
 
 ```
-pending_approval ─approve─► approved ─paypal order created─► awaiting_payment ─capture COMPLETED+verified─► paid
-       │                       │                                   │  ├─ capture PENDING ─► payment_pending ─webhook COMPLETED─► paid
-       └─expire/cancel─► cancelled   └─reservation expired─► expired   ├─ DENIED/FAILED ─► payment_failed (retry allowed → awaiting_payment)
-                                                                       └─ amount/currency mismatch ─► needs_review (exception)
+pending_approval ─approve (hash, margin)─► approved ─PayPal order created─► awaiting_payment ─capture claim (margin)─► capturing
+   │                                          │                                │    ▲                                     │
+   └──── cancel / hold expired ───────────────┴──── cancel / hold expired ─────┘    └── INSTRUMENT_DECLINED, ORDER_NOT_APPROVED
+                     ▼                                                                    (no capture: hold kept, buyer retries)
+            cancelled / expired (hold released)
+capturing ─verified COMPLETED─► paid (reservation committed, sale movements, bag emptied)
+capturing ─verified PENDING─► payment_pending ─verified COMPLETED─► paid
+capturing ─timeout / 5xx / unknown─► capturing (hold kept; reconcile; same request id after STALE_CAPTURE_AFTER)
+capturing / payment_pending ─capture DECLINED or FAILED, or PayPal order VOIDED─► payment_failed (hold released)
+capturing / payment_pending ─verification mismatch, unexpected status, or 72 h unresolved─► needs_review (hold kept)
+cancelled / expired / payment_failed ─verified COMPLETED found later─► needs_review (capture_after_end; no stock moves)
 ```
-Transitions happen only in `orders` service functions, guarded by the current status (compare-and-set `UPDATE … WHERE status = ?`). The same guard works on SQLite and PostgreSQL, and it makes concurrent capture-response and webhook processing safe.
+Transitions happen only in the `orders` and `payments` services, guarded by the current status (compare-and-set `UPDATE … WHERE status = ?`), on SQLite and PostgreSQL. Every payment outcome (capture response, explicit reconcile, the merchant command, and M3.3's webhooks) converges on `payments.service.finalize`, which locks cart → order → reservation → variants and applies each outcome exactly once. No transaction or lock is held during a PayPal call. See ADR-026.
+
+**Payment endpoints (M3.2, `app/api/checkout.py`).** All POST, same-origin checked, owned through the `atlas_cart` cookie (another cart's reference is `order_not_found`), `no-store`. 503 `payments_unavailable` unless `PAYPAL_MODE=sandbox` and the client id, secret and merchant id are set; the rest of the shop is unaffected.
+
+| Endpoint | Result |
+|---|---|
+| `POST /api/cart/orders/{ref}/paypal-order` `{"version_hash"}` | `{paypal_order_id, order}`; repeatable (one PayPal order per Atlas order). 409 `order_changed`, `hold_expiring`, `order_not_payable`; 503 `payment_provider_unavailable` (retry is safe); 502 `payment_provider_rejected` |
+| `POST /api/cart/orders/{ref}/capture` `{"paypal_order_id"}` | `{result, recoverable, order}`; `result` is `paid`, `pending`, `processing`, `instrument_declined` / `payer_action_required` (recoverable: `actions.restart()`), `failed`, `needs_review`. 409 `paypal_order_mismatch`, `hold_expiring`, `order_not_payable` |
+| `POST /api/cart/orders/{ref}/reconcile` | Same shape: asks PayPal about a `capturing` or `payment_pending` order and applies what it says |
+| `GET /api/checkout/config` | `{payments_enabled, paypal_client_id (public, only when enabled), currency: "USD", intent: "capture"}` |
+
+`GET /api/cart/orders/{ref}` never calls PayPal and never changes payment state. The merchant command `python -m app.payments review | reconcile REF` lists orders needing attention and reconciles one (any status, so a payment found after an order ended is flagged).
 
 ## 6. Trust boundaries
 
