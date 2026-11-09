@@ -58,6 +58,7 @@ from tests.order_support import (
     cart_version,
     count,
     look,
+    mark_paid,
     order_row,
     reasons,
     reservation_status_of,
@@ -393,7 +394,15 @@ def test_payment_in_progress_keeps_the_hold(s: Session, clock: FixedClock, statu
     cart_id = cart_with(s, clock, {"A-S": 1})
     ref = order_for(s, cart_id, clock).order.public_ref
     with unit_of_work(s):  # M3.2 sets these; M3.1 only has to respect them
-        s.execute(update(Order).where(Order.public_ref == ref).values(status=status))
+        s.execute(
+            update(Order)
+            .where(Order.public_ref == ref)
+            .values(
+                status=status,
+                paypal_order_id="PP-" + ref[:8],
+                review_reason="unresolved_timeout" if status == "needs_review" else None,
+            )
+        )
     late = FixedClock(NOW + HOLD + timedelta(hours=1))
 
     with pytest.raises(PaymentInProgress):
@@ -415,7 +424,7 @@ def test_final_orders_are_not_cancellable(s: Session, clock: FixedClock) -> None
             update(Reservation).where(Reservation.id == order.reservation_id).values(status="committed", ended_at=NOW)
         )
         commit_reservation_stock(s, order.reservation_id, now=NOW)
-        s.execute(update(Order).where(Order.id == order.id).values(status="paid"))
+        mark_paid(s, order.id)
     with pytest.raises(OrderNotCancellable):
         cancel_order(s, cart_id, ref, clock=clock)
     assert checkout_summary(s, cart_id, clock=clock) is None
@@ -457,7 +466,7 @@ def test_commit_sells_the_held_stock_once(s: Session, clock: FixedClock) -> None
     with pytest.raises(InventoryInvariantViolation, match="committed, not released"), unit_of_work(s):
         release_reservation_stock(s, reservation_id, now=NOW)
     with unit_of_work(s):  # keep the invariants' order <-> reservation pairing consistent
-        s.execute(update(Order).where(Order.reservation_id == reservation_id).values(status="paid"))
+        mark_paid(s, s.execute(select(Order.id).where(Order.reservation_id == reservation_id)).scalar_one())
 
 
 @pytest.mark.parametrize("status", ["active", "order_hold", "released", "expired"])

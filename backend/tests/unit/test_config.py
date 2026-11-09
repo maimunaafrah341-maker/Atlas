@@ -77,3 +77,42 @@ def test_reservation_ttl_out_of_range_is_refused(minutes: int) -> None:
 def test_reservation_ttl_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESERVATION_TTL_MINUTES", "30")
     assert settings().reservation_ttl_minutes == 30
+
+
+SANDBOX = {
+    "paypal_mode": "sandbox",
+    "paypal_client_id": "client-id",
+    "paypal_client_secret": "client-secret-value",
+    "paypal_merchant_id": "ABCDEFGH23456",
+}
+
+
+def test_payments_need_sandbox_mode_and_complete_credentials() -> None:
+    assert settings(**SANDBOX).payments_enabled
+    assert settings(**{**SANDBOX, "paypal_mode": " Sandbox "}).payments_enabled
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"paypal_mode": ""}, "PAYPAL_MODE"),
+        ({"paypal_mode": "live"}, "PAYPAL_MODE"),
+        ({"paypal_mode": "production"}, "PAYPAL_MODE"),
+        ({"paypal_client_id": ""}, "PAYPAL_CLIENT_ID"),
+        ({"paypal_client_secret": " "}, "PAYPAL_CLIENT_SECRET"),
+        ({"paypal_merchant_id": ""}, "PAYPAL_MERCHANT_ID"),
+        ({"paypal_merchant_id": "abcdefgh23456"}, "PAYPAL_MERCHANT_ID"),
+    ],
+)
+def test_anything_else_disables_payments_without_failing_startup(change: dict[str, str], reason: str) -> None:
+    result = settings(**{**SANDBOX, **change})  # never raises: the shop must still start
+    assert not result.payments_enabled
+    assert result.paypal_problem is not None
+    assert reason in result.paypal_problem
+    assert "live" not in result.paypal_problem.replace("(Sandbox only", "")  # no configured value echoed
+
+
+def test_the_client_secret_never_appears_in_repr() -> None:
+    result = settings(**SANDBOX)
+    assert "client-secret-value" not in repr(result)
+    assert "client-secret-value" not in str(result.model_dump())

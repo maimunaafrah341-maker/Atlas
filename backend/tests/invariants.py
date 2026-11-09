@@ -11,6 +11,8 @@ set ``stock_reserved`` directly (the factories default it to 0).
    one release or expiry for ``released`` / ``expired``, exactly one sale for ``committed``
    (a sale lowers on-hand and reserved stock by the same quantity).
 4. Orders and their reservations agree (ADR-025), and a cart has at most one open order.
+5. A paid order has verified, completed payment evidence (ADR-026), and only a paid order's
+   reservation is committed.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.domain.catalog.models import Variant
 from app.domain.inventory.models import RESERVATION_LINKED_REASONS, InventoryMovement
 from app.domain.orders.models import OPEN_STATUSES, Order
+from app.domain.payments.models import Payment
 from app.domain.reservations.models import HOLDING_STATUSES, Reservation, ReservationItem
 
 END_REASON = {"released": "reservation_release", "expired": "reservation_expiry", "committed": "sale"}
@@ -103,12 +106,14 @@ def assert_inventory_invariants(session: Session) -> None:
 
     # 4. Orders agree with their reservations; at most one open order per cart.
     rows = session.execute(
-        select(Order.cart_id, Order.status, Reservation.status.label("reservation_status")).join(
-            Reservation, Reservation.id == Order.reservation_id
-        )
+        select(
+            Order.id, Order.cart_id, Order.status, Order.review_reason, Reservation.status.label("reservation_status")
+        ).join(Reservation, Reservation.id == Order.reservation_id)
     ).all()
     for row in rows:
         allowed = ORDER_RESERVATION[row.status]
+        if row.status == "needs_review" and row.review_reason == "capture_after_end":
+            allowed = {"released", "expired"}  # paid after the order had ended: stock already returned
         assert row.reservation_status in allowed, f"{row.status} order with a {row.reservation_status} reservation"
     open_per_cart = Counter(row.cart_id for row in rows if row.status in OPEN_STATUSES)
     assert all(count == 1 for count in open_per_cart.values()), "a cart has more than one open order"
@@ -118,3 +123,12 @@ def assert_inventory_invariants(session: Session) -> None:
     assert adopted == sum(row.reservation_status in ("order_hold", "committed") for row in rows), (
         "an order_hold or committed reservation has no order"
     )
+
+    # 5. Paid orders have verified completed payment evidence.
+    verified = set(
+        session.execute(
+            select(Payment.order_id).where(Payment.status == "COMPLETED", Payment.verification == "verified")
+        ).scalars()
+    )
+    paid = {row.id for row in rows if row.status == "paid"}
+    assert paid <= verified, "a paid order without verified completed payment evidence"
