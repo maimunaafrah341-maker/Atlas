@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CatalogueLanguageProvider } from "../app/catalogueLanguage.tsx";
 import { routes } from "../app/routes.tsx";
-import { errorResponse, jsonResponse, page, product } from "../test/fixtures.ts";
+import { errorResponse, jsonResponse, page, product, withCart } from "../test/fixtures.ts";
 
 const API = "/api/catalog/products";
 
@@ -20,7 +20,7 @@ function renderShop(url = "/shop") {
 
 function stubCatalogue(body = page([product()])) {
   const fetchMock = vi.fn(async () => jsonResponse(body));
-  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("fetch", withCart(fetchMock));
   return fetchMock;
 }
 
@@ -217,7 +217,7 @@ describe("shop page", () => {
       .fn()
       .mockResolvedValueOnce(errorResponse(500, "internal_error", "Something went wrong on our side."))
       .mockResolvedValueOnce(jsonResponse(page([product()])));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withCart(fetchMock));
     renderShop("/shop?category=jackets");
     expect(await screen.findByRole("alert")).toHaveTextContent("The catalogue couldn’t be loaded. Something went wrong on our side.");
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
@@ -229,7 +229,9 @@ describe("shop page", () => {
   it("explains a request the API rejects and offers a reset instead of a retry", async () => {
     vi.stubGlobal(
       "fetch",
+      withCart(
       vi.fn(async () => errorResponse(422, "invalid_request", "Invalid value for q: must contain a word of at least 2 letters or digits")),
+      ),
     );
     const router = renderShop("/shop?q=a");
     expect(await screen.findByRole("alert")).toHaveTextContent("These filters can’t be applied. Invalid value for q");

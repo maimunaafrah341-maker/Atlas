@@ -1,4 +1,5 @@
 import type { RouteObject } from "react-router";
+import { BagPage } from "../pages/BagPage.tsx";
 import { HomePage } from "../pages/HomePage.tsx";
 import { NotFoundPage } from "../pages/NotFoundPage.tsx";
 import { ProductPage } from "../pages/ProductPage.tsx";
@@ -16,6 +17,7 @@ export const routes: RouteObject[] = [
       { index: true, element: <HomePage /> },
       { path: "shop", element: <ShopPage /> },
       { path: "products/:slug", element: <ProductPage /> },
+      { path: "bag", element: <BagPage /> },
       { path: "status", element: <StatusPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],

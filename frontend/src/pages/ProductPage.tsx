@@ -5,6 +5,7 @@ import { CATEGORY_TINTS } from "../components/catalogue/categoryTints.ts";
 import { TranslationNote } from "../components/catalogue/TranslationNote.tsx";
 import { ImagePlaceholder } from "../components/ui/ImagePlaceholder.tsx";
 import { PageIntro } from "../components/ui/PageIntro.tsx";
+import { AddToBag } from "../features/cart/AddToBag.tsx";
 import { ShippingEstimate } from "../features/product/ShippingEstimate.tsx";
 import { VariantPicker } from "../features/product/VariantPicker.tsx";
 import { chooseColour, chooseSize, findVariant, settle, type Selection } from "../features/product/variantSelection.ts";
@@ -101,7 +102,7 @@ function ProductDetail({ product }: { product: Product }) {
           />
 
           <SelectedAvailability selected={selected} selection={selection} />
-          <BagUnavailable />
+          <AddToBag key={selected?.sku ?? "none"} selected={selected} />
           <ShippingEstimate />
           <Details product={product} selected={selected} />
         </div>
@@ -156,26 +157,6 @@ function SelectedAvailability({ selected, selection }: { selected: Variant | nul
     <p className="flex items-center gap-2.5 text-sm" aria-live="polite">
       {text}
     </p>
-  );
-}
-
-function BagUnavailable() {
-  const id = useId();
-  return (
-    <div>
-      {/* Focusable but inert: announced as unavailable, with the reason, until the cart API is integrated. */}
-      <button
-        type="button"
-        aria-disabled="true"
-        aria-describedby={id}
-        className="w-full cursor-not-allowed bg-forest-900/35 px-6 py-4 text-sm text-on-dark"
-      >
-        Add to bag
-      </button>
-      <p id={id} className="mt-2 text-xs text-ink-muted">
-        Not available yet: the bag isn’t part of this demo, so nothing can be bought.
-      </p>
-    </div>
   );
 }
 
