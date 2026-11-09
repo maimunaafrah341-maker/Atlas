@@ -31,6 +31,14 @@ SECURITY_HEADERS = {
 }
 
 
+# Personal, per-cookie responses: never stored by the browser or any cache, errors included.
+NO_STORE_PREFIX = "/api/cart"
+
+
+def _no_store(path: str) -> bool:
+    return path == NO_STORE_PREFIX or path.startswith(NO_STORE_PREFIX + "/")
+
+
 class SafetyMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -49,6 +57,8 @@ class SafetyMiddleware:
                 headers = MutableHeaders(scope=message)
                 for name, value in SECURITY_HEADERS.items():
                     headers.setdefault(name, value)
+                if _no_store(scope.get("path", "")):
+                    headers["Cache-Control"] = "no-store"
             await send(message)
 
         try:

@@ -148,7 +148,27 @@ Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows 
 | Cart write service, unchanged-quantity no-op, D1 lock-order fix (commits `a5533f0`, `fa5cb73`) | Implemented; full backend suite passed locally on SQLite and on PostgreSQL 18 in CI (run 42472442771: 392 passed, 0 failed, 0 errors, 0 skipped) |
 | Deterministic PostgreSQL concurrency suite (`tests/integration/test_reservation_concurrency.py`, P1–P11, the D1 regression and the old-order deadlock control) | Executed and passed on PostgreSQL 18 in CI (run 42472442771). All 15 required `postgres`-marked tests ran (the CI guard's minimum); none skipped. PostgreSQL-only: skipped by design in local SQLite runs, which no PostgreSQL concurrency claim relies on |
 | Product archived during a concurrent hold | Accepted limitation (documented on `hold_reservation_stock`) |
-| Bounded global sweeper; `/api/cart` endpoints, cookies, CSRF; frontend | Deferred: optional sweeper per ADR-024 D6; HTTP and UI are M2.2 PR 2 / later |
+| Bounded global sweeper | Deferred: optional, per ADR-024 D6 |
+| `/api/cart` endpoints, cookie, same-origin checks | M2.3; see "HTTP layer" below. The frontend bag is a separate PR |
+
+**HTTP layer (M2.3, `app/api/cart.py`, `app/api/security.py`).** A thin layer over the services above; it adds no locking or transactions of its own.
+
+| Endpoint | Service | Result |
+|---|---|---|
+| `GET /api/cart?lang=` | `active_reservation`, then `read_cart` | 200. Never creates a cart; no cookie, or an unknown or expired cart, reads as an empty cart and a stale cookie is deleted |
+| `PUT /api/cart/items/{sku}` `{"quantity": n}` | `set_quantity` | 200. The first add creates the cart and sets the cookie; a failed first add leaves neither |
+| `DELETE /api/cart/items/{sku}` | `remove_line` | 200. Removing a missing line, or with no cart, changes nothing |
+| `POST /api/cart/reservation` | `reserve_cart` | 201 new; 200 for the existing reservation of the same cart version, returned **unchanged and never renewed**. No cart: 404 `cart_not_found` |
+| `DELETE /api/cart/reservation` | `release_cart_reservation` | 200. Releasing with nothing active changes nothing |
+
+- **Responses** carry lines (SKU, product slug, name in the requested language with the catalogue's `fallback` and `machine_translated` flags, size, colour, quantity, live unit price, line total, `available`), `item_count`, a server-computed `subtotal` of available lines, the cart's `expires_at` and the active reservation (`id` is its `public_id`; items by SKU). Never: the token or its digest, internal ids, cart versions, variant ids or stock counts (D-5).
+- **GET's only write** is the documented lazy expiry of an overdue reservation (rule 7's compare-and-set, so stock is released exactly once). It never changes the cart's version, expiry or lines.
+- **Cookie** `atlas_cart`: the raw token (only its SHA-256 digest is stored), `HttpOnly`, `SameSite=Lax`, `Path=/api/cart`, `Secure` in production, `Max-Age` equal to the cart's remaining lifetime (renewed on each response that has a cart). Deleted with the same attributes when stale.
+- **Same-origin check** on every PUT, POST and DELETE (403 `cross_origin_request`, before body validation): exactly one `Origin` header, equal to the expected origin; `Sec-Fetch-Site`, when sent, must be `same-origin`. The expected origin is the trusted scheme plus the `Host` header. In production the scheme is always `https` (Render terminates TLS); it is **not** taken from `X-Forwarded-Proto`, because `scripts/start.sh` runs uvicorn with `--forwarded-allow-ips '*'`. Elsewhere it is the connection's scheme. uvicorn never rewrites `Host` from forwarded headers.
+- **Development through the Vite proxy:** Vite's proxy rewrites `Host` to the backend address by default, so same-origin changes from the dev server are refused until the proxy keeps the browser's host (`changeOrigin: false` in `frontend/vite.config.ts`); that one-line change belongs to the frontend bag PR.
+- **`Cache-Control: no-store`** on every `/api/cart` response, including errors and 500s (`SafetyMiddleware`).
+- **Clock:** `app.state.clock` (`SystemClock`; tests inject a `FixedClock`).
+- **Known demo limitations:** no rate limit on cart creation; expired carts are not cleaned up (rows remain, harmless to correctness).
 
 ## 4. Key data flows
 

@@ -8,6 +8,7 @@ the same products in the same order. Every ordering ends with product id as a ti
 from __future__ import annotations
 
 import math
+from collections.abc import Collection
 from dataclasses import dataclass
 from functools import reduce
 from typing import Any, Literal, get_args
@@ -280,3 +281,35 @@ def get_product(session: Session, slug: str, lang: Language = DEFAULT_LANGUAGE) 
     if product is None:
         raise ProductNotFound(slug)
     return _to_view(product, SearchFilters(lang=lang))
+
+
+@dataclass(frozen=True)
+class ProductName:
+    """A product's display name in a requested language, with the catalogue's fallback flags."""
+
+    name: str
+    lang: str
+    fallback: bool
+    machine_translated: bool
+
+
+def product_names(session: Session, slugs: Collection[str], lang: Language) -> dict[str, ProductName]:
+    """Names for the given product slugs in ``lang``, by the same rule as the catalogue.
+
+    Archived products are included (a cart may still hold them). Read-only.
+    """
+    if not slugs:
+        return {}
+    products = session.execute(
+        select(Product).where(Product.slug.in_(set(slugs))).options(selectinload(Product.translations))
+    ).scalars()
+    names: dict[str, ProductName] = {}
+    for product in products:
+        translation, fallback = _pick_translation(product, lang)
+        names[product.slug] = ProductName(
+            name=translation.name,
+            lang=translation.lang,
+            fallback=fallback,
+            machine_translated=translation.machine_translated,
+        )
+    return names
