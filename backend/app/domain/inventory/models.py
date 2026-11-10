@@ -17,9 +17,13 @@ from app.domain.catalog.vocab import sql_in
 # Changes to stock_on_hand (M1). Only these are accepted by inventory.adjust_stock.
 STOCK_ADJUSTMENT_REASONS: tuple[str, ...] = ("initial_stock", "restock", "adjustment")
 # Changes to stock_reserved (M2): a cart reservation holds stock, is released, or expires.
-# Sale/commit reasons arrive with M3 (payment capture) via their own migration.
 RESERVATION_REASONS: tuple[str, ...] = ("reservation_hold", "reservation_release", "reservation_expiry")
-MOVEMENT_REASONS: tuple[str, ...] = STOCK_ADJUSTMENT_REASONS + RESERVATION_REASONS
+# M3 (ADR-025): a committed reservation's stock leaves the shop. On-hand and reserved stock both
+# fall by the item quantity, so available stock is unchanged.
+SALE_REASONS: tuple[str, ...] = ("sale",)
+# Movements that name their reservation.
+RESERVATION_LINKED_REASONS: tuple[str, ...] = RESERVATION_REASONS + SALE_REASONS
+MOVEMENT_REASONS: tuple[str, ...] = STOCK_ADJUSTMENT_REASONS + RESERVATION_REASONS + SALE_REASONS
 
 
 class InventoryMovement(Base):
@@ -32,7 +36,7 @@ class InventoryMovement(Base):
     on_hand_after: Mapped[int] = mapped_column(Integer)
     reserved_after: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(String(24))
-    # Set exactly for reservation movements (M2, ADR-024); NULL for stock adjustments.
+    # Set exactly for reservation movements and sales (M2, M3; ADR-024, ADR-025); NULL for stock adjustments.
     # RESTRICT: a reservation with movements is audit history and is never deleted.
     reservation_id: Mapped[int | None] = mapped_column(ForeignKey("reservations.id", ondelete="RESTRICT"))
     ref: Mapped[str | None] = mapped_column(String(64))
@@ -42,15 +46,17 @@ class InventoryMovement(Base):
 
     __table_args__ = (
         CheckConstraint(sql_in("reason", MOVEMENT_REASONS), name="reason"),
-        # Stock adjustments move only on-hand stock; reservation movements move only reserved stock.
+        # Stock adjustments move only on-hand stock; reservation movements move only reserved
+        # stock; a sale removes the same quantity from both.
         CheckConstraint(
             f"({sql_in('reason', RESERVATION_REASONS)} AND delta_on_hand = 0 AND delta_reserved <> 0)"
-            f" OR ({sql_in('reason', STOCK_ADJUSTMENT_REASONS)} AND delta_reserved = 0)",
+            f" OR ({sql_in('reason', STOCK_ADJUSTMENT_REASONS)} AND delta_reserved = 0)"
+            f" OR ({sql_in('reason', SALE_REASONS)} AND delta_on_hand < 0 AND delta_reserved = delta_on_hand)",
             name="reason_deltas",
         ),
-        # Reservation movements always name their reservation; stock adjustments never do.
+        # Reservation movements and sales always name their reservation; stock adjustments never do.
         CheckConstraint(
-            f"({sql_in('reason', RESERVATION_REASONS)} AND reservation_id IS NOT NULL)"
+            f"({sql_in('reason', RESERVATION_LINKED_REASONS)} AND reservation_id IS NOT NULL)"
             f" OR ({sql_in('reason', STOCK_ADJUSTMENT_REASONS)} AND reservation_id IS NULL)",
             name="reservation_link",
         ),

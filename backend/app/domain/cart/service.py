@@ -13,7 +13,9 @@ An edit, in one transaction:
 4. write the line.
 
 Any failure rolls all of it back, so an invalid edit never releases the customer's
-reservation. Before the cart lock, overdue reservations of other carts holding the variant are
+reservation. While the cart has an open order (M3.1, ADR-025) every edit is refused with
+``checkout_in_progress``, checked right after the cart lock; a due order is expired first, in
+its own transaction. Before the cart lock, overdue reservations of other carts holding the variant are
 swept (one short transaction each, never locking a cart).
 
 Tokens: the raw cart token exists only in memory, returned once when a cart is created; only
@@ -38,6 +40,7 @@ from app.domain.catalog.models import Product, Variant
 from app.domain.catalog.service import ProductName, product_names
 from app.domain.catalog.vocab import Language
 from app.domain.inventory.service import InsufficientAvailableStock, InvalidQuantity, VariantInactive, VariantNotFound
+from app.domain.orders.holds import expire_due_order_for_cart, refuse_if_checkout_open, sweep_due_orders
 from app.domain.reservations.models import Reservation
 from app.domain.reservations.service import (
     DEFAULT_SWEEP_LIMIT,
@@ -213,13 +216,20 @@ def _variant_id(session: Session, sku: str) -> int | None:
 
 
 def _sweep_for(session: Session, sku: str, cart_id: int | None, clock: Clock) -> None:
-    """Before the cart lock: expire other carts' overdue holds on this variant (bounded)."""
+    """Before the cart lock: expire other carts' overdue holds and due orders on this variant
+    (bounded), and this cart's own due order (ADR-025). Each in its own short transaction;
+    never a cart lock."""
     with unit_of_work(session):
         variant_id = _variant_id(session, sku)
     if variant_id is not None:
         sweep_overdue(
             session, variant_ids=[variant_id], exclude_cart_id=cart_id, clock=clock, limit=DEFAULT_SWEEP_LIMIT
         )
+        sweep_due_orders(
+            session, variant_ids=[variant_id], exclude_cart_id=cart_id, clock=clock, limit=DEFAULT_SWEEP_LIMIT
+        )
+    if cart_id is not None:
+        expire_due_order_for_cart(session, cart_id, clock=clock)
 
 
 # --- Locked steps ------------------------------------------------------------------------------
@@ -300,6 +310,8 @@ def _set_quantity(session: Session, cart_id: int | None, sku: str, quantity: int
                 .returning(Cart.id)
             ).scalar_one()
         _lock_cart(session, cart_id, now)
+        if new_token is None:
+            refuse_if_checkout_open(session, cart_id)
         # Under the cart lock (fresh read) and before the reservation is touched: an unchanged
         # quantity is not an edit. Raising rolls back the version advance and expiry refresh.
         if new_token is None and _line_quantity(session, cart_id, sku) == quantity:
@@ -367,6 +379,7 @@ def remove_line(session: Session, cart_id: int, sku: str, *, clock: Clock) -> Ca
         with unit_of_work(session):
             now = clock.now()
             _lock_cart(session, cart_id, now)
+            refuse_if_checkout_open(session, cart_id)
             variant_id = _variant_id(session, sku)
             present = variant_id is not None and (
                 session.execute(

@@ -86,16 +86,16 @@ All money is stored as an **integer in minor units (USD cents) plus an ISO 4217 
 | `products` / `product_translations` | id, slug (unique), category, status, sort_order · product_id, lang, name, description, `machine_translated`, derived `search_name`/`search_text` | Prices are never on translations. Unique (product, lang). Missing language → English fallback |
 | `product_tags` (M1) | product_id, tag (closed vocabulary) | Feature/activity attributes, filterable portably (D-4) |
 | `variants` | id, product_id, sku (unique), size, colour, price_minor, currency, stock_on_hand, stock_reserved, low_stock_threshold, status | `available = on_hand − reserved`; CHECK `stock_reserved <= stock_on_hand`; unique (product, size, colour) |
-| `inventory_movements` | variant_id, delta_on_hand, delta_reserved, on_hand_after, reserved_after, reason, reservation_id, ref, note | Append-only audit, written in the same transaction as every stock change. Stock adjustments move only on-hand stock and have no `reservation_id`; reservation movements (`reservation_hold` / `_release` / `_expiry`) move only reserved stock and always name their reservation (M2) |
-| `reservations` / `reservation_items` | public_id, cart_id, cart_version, status, created_at, expires_at, ended_at · variant_id, qty | Owned by a cart (ADR-024). active → released / expired (M2); at most one active per cart; never deleted. Item quantities are the immutable record used for release. No prices: the price snapshot belongs to the M3 order. M3 adds the commit state |
+| `inventory_movements` | variant_id, delta_on_hand, delta_reserved, on_hand_after, reserved_after, reason, reservation_id, ref, note | Append-only audit, written in the same transaction as every stock change. Stock adjustments move only on-hand stock and have no `reservation_id`; reservation movements (`reservation_hold` / `_release` / `_expiry`) move only reserved stock and always name their reservation (M2); a `sale` lowers on-hand and reserved stock by the same quantity and names its reservation (M3) |
+| `reservations` / `reservation_items` | public_id, cart_id, cart_version, status, created_at, expires_at, ended_at · variant_id, qty | Owned by a cart (ADR-024). active → released / expired (M2); active → order_hold when an order adopts it, then committed / released / expired only through the order (M3, ADR-025); at most one active per cart; never deleted. Item quantities are the immutable record used for release and sale. No prices: the price snapshot belongs to the order |
 | `shipping_rates` / `shipping_rate_countries` (M1) | zone_code (unique), name, price_minor, currency, status · country_code (PK), shipping_rate_id | Flat rate per zone. A country belongs to at most one zone; unknown → `unsupported_destination` (D-1) |
 | `knowledge_docs` / `knowledge_chunks` | doc: title, topic, lang · chunk: text | Index: PostgreSQL `tsvector` (GIN index, per-language text-search config) or SQLite FTS5 virtual table |
 | `conversations` | session_id, ui_locale, `preferred_lang` (null = Auto), `current_lang` | §8 |
 | `messages` | role, `original_text` (immutable), detected_lang, detect_confidence, response_lang, `lang_source`, retrieval_text | §8 |
 | `intents` | message_id, json, schema_version, valid | Audit and demo panel |
 | `carts` / `cart_items` | token_hash, version, created_at, updated_at, expires_at · variant_id, qty (1–10) | Anonymous cart identified by a cookie token, stored hashed (ADR-024). `version` serialises edits and reservations (§3.1). No prices stored; expires 30 days after the last change |
-| `orders` | id (public ref), status, version_hash, currency, subtotal/shipping/total_minor, ship_country, lang | State machine §5 |
-| `order_items` | order_id, variant_id, sku, name_snapshot, unit_price_minor, qty, line_total_minor | **Immutable** snapshot |
+| `orders` (M3.1) | public_ref, cart_id, reservation_id (unique), status, version_hash, currency, subtotal/shipping/total_minor, ship_country, shipping_zone, lang, hold_expires_at | State machine §5; adopts the cart's reservation (ADR-025); at most one open order per cart |
+| `order_items` (M3.1) | order_id, variant_id, sku, product_slug, name_snapshot, size, colour, unit_price_minor, qty, line_total_minor | **Immutable** snapshot |
 | `payments` | order_id, paypal_order_id, capture_id, status, amount_minor, currency, raw (redacted) | |
 | `paypal_webhook_events` | event_id **UNIQUE**, type, verified, processed_at | Dedup key |
 | `outbox_events` | id (UUID = idempotency key), type, payload, status, attempts, max_attempts, next_attempt_at, lease_until, last_error, created_at, delivered_at | §4.3 |
@@ -169,6 +169,17 @@ Isolation is PostgreSQL's default, **READ COMMITTED**: each statement sees rows 
 - **`Cache-Control: no-store`** on every `/api/cart` response, including errors and 500s (`SafetyMiddleware`).
 - **Clock:** `app.state.clock` (`SystemClock`; tests inject a `FixedClock`).
 - **Known demo limitations:** no rate limit on cart creation; expired carts are not cleaned up (rows remain, harmless to correctness).
+
+**Orders (M3.1, ADR-025; `app/domain/orders/`, `app/api/checkout.py`).** The order adopts the cart's reservation (`active → order_hold`) and owns the hold from then on; the lock order becomes **cart → order → reservation → variants**, and cancellation and order expiry skip the cart (like rule 8). Every cart write takes the cart lock and then refuses with `checkout_in_progress` while an open order exists; the cart's own due order is expired first, in its own transaction, and other carts' due orders on the same variants are swept with the reservation sweep (same bound).
+
+| Endpoint | Service | Result |
+|---|---|---|
+| `POST /api/cart/orders?lang=` `{"ship_country": "FR"}` | `create_order` | 201 new; 200 for the cart's existing open order (recovery). 409 `reservation_required`, `cart_has_unavailable_items`, `checkout_conflict`; 422 `unsupported_destination`, `invalid_country_code` |
+| `GET /api/cart/orders/{ref}?lang=` | `get_order` | 200. Expires a due hold first (lazy). Another cart's order: 404 `order_not_found` |
+| `POST /api/cart/orders/{ref}/cancel` | `cancel_order` | 200, idempotent; past the deadline it records `expired`. 409 `payment_in_progress` or `order_not_cancellable` |
+| `GET /api/checkout/config` | none | `{"payments_enabled": false}` until M3.2 |
+
+Order responses carry the reference, status, `version_hash`, lines (live names in the requested language; prices from the snapshot), totals, shipping and `hold_expires_at`; never internal ids or stock counts. `GET /api/cart` adds `checkout: {order_ref, status} | null`. Changes are same-origin checked and every response is `no-store` (under `/api/cart`). SQLite migrations run each revision in one real transaction (explicit `BEGIN`, so batch-mode DDL rolls back too), with foreign keys off and a `PRAGMA foreign_key_check` before each revision commits; enforcement is switched back on before the connection is released (`alembic/env.py`), because batch mode rebuilds referenced tables.
 
 ## 4. Key data flows
 

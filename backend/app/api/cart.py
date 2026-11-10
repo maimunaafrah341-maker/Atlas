@@ -32,6 +32,7 @@ from app.config import Settings
 from app.domain.cart.service import find_cart, read_cart, remove_line, set_quantity
 from app.domain.catalog.schemas import Money
 from app.domain.catalog.vocab import DEFAULT_LANGUAGE, SKU_PATTERN, Language
+from app.domain.orders.service import checkout_summary
 from app.domain.reservations.service import (
     CartNotFound,
     ReservationView,
@@ -89,12 +90,20 @@ class ReservationOut(BaseModel):
     items: list[ReservationItemOut]
 
 
+class CheckoutOut(BaseModel):
+    """The cart's open order (M3.1). While set, the bag can't be changed (checkout_in_progress)."""
+
+    order_ref: str
+    status: str
+
+
 class CartOut(BaseModel):
     lines: list[CartLineOut]
     item_count: int
     subtotal: Money
     expires_at: datetime | None
     reservation: ReservationOut | None
+    checkout: CheckoutOut | None = None
 
 
 # --- Helpers ----------------------------------------------------------------------------------
@@ -165,6 +174,8 @@ def _respond(
                 available=line.available,
             )
         )
+    # Can write: a due order hold is expired first (lazy, ADR-025), like the reservation read.
+    checkout = checkout_summary(session, cart_id, clock=clock)
     set_cart_cookie(response, token, expires_at=named.cart.expires_at, now=clock.now(), settings=settings)
     return CartOut(
         lines=lines,
@@ -172,6 +183,7 @@ def _respond(
         subtotal=Money(amount_minor=subtotal, currency=settings.store_currency),
         expires_at=named.cart.expires_at,
         reservation=_reservation_out(reservation),
+        checkout=None if checkout is None else CheckoutOut(order_ref=checkout.public_ref, status=checkout.status),
     )
 
 

@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     store_currency: str = "USD"
     # M2 (D3): how long a cart's stock reservation holds before it expires. No renewal.
     reservation_ttl_minutes: int = Field(default=15, ge=1, le=60)
+    # M3 (ADR-025): creating an order adopts the cart's reservation and gives it a new, protected
+    # deadline this many minutes away. Approved range 15-60.
+    order_hold_minutes: int = Field(default=30, ge=15, le=60)
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -106,6 +109,10 @@ class Settings(BaseSettings):
     @property
     def reservation_ttl(self) -> timedelta:
         return timedelta(minutes=self.reservation_ttl_minutes)
+
+    @property
+    def order_hold(self) -> timedelta:
+        return timedelta(minutes=self.order_hold_minutes)
 
     @property
     def version(self) -> str:

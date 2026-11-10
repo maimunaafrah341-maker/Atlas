@@ -1,7 +1,14 @@
+import sqlite3
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
 import pytest
 from alembic import command
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.pool import Pool
 
 from app.db import create_db_engine
 from app.migrations import alembic_config, current_revision, head_revision
@@ -49,6 +56,7 @@ def test_upgrade_is_idempotent(database_url: str) -> None:
 # --- 0003_cart_reservations ----------------------------------------------------------------
 
 M1_HEAD = "0002_catalog_inventory_shipping"
+M2_HEAD = "0003_cart_reservations"
 M1_MOVEMENT_CHECKS = {
     "ck_inventory_movements_reason",
     "ck_inventory_movements_non_zero_delta",
@@ -209,7 +217,7 @@ def test_upgrade_to_0003_preserves_m1_movements_and_constraints(database_url: st
 
 def test_downgrade_refuses_when_reservation_history_exists(database_url: str) -> None:
     config = alembic_config(database_url)
-    command.upgrade(config, "head")
+    command.upgrade(config, M2_HEAD)  # 0003 on its own; 0004 has its own tests
     _seed_m1_stock(database_url)
     _hold_stock(database_url)
     before = _movement_rows(database_url)
@@ -228,7 +236,7 @@ def test_downgrade_refuses_when_reservation_history_exists(database_url: str) ->
 
 def test_downgrade_refuses_when_only_a_reservation_exists(database_url: str) -> None:
     config = alembic_config(database_url)
-    command.upgrade(config, "head")
+    command.upgrade(config, M2_HEAD)  # 0003 on its own; 0004 has its own tests
     _execute(database_url, CART, CART_PARAMS)
     _execute(database_url, RESERVATION, RESERVATION_PARAMS)
 
@@ -241,7 +249,7 @@ def test_downgrade_refuses_when_only_a_reservation_exists(database_url: str) -> 
 
 def test_downgrade_without_reservations_restores_m1_schema(database_url: str) -> None:
     config = alembic_config(database_url)
-    command.upgrade(config, "head")
+    command.upgrade(config, M2_HEAD)  # 0003 on its own; 0004 has its own tests
     _seed_m1_stock(database_url)
     _execute(database_url, CART, CART_PARAMS)  # carts without reservations are not audit history
     before = _movement_rows(database_url)
@@ -263,3 +271,238 @@ def test_downgrade_without_reservations_restores_m1_schema(database_url: str) ->
     assert revision_of(database_url) == head_revision()
     assert MovementSchema(database_url).checks == M2_MOVEMENT_CHECKS
     assert _movement_rows(database_url) == before
+
+
+# --- 0004_orders -------------------------------------------------------------------------------
+
+M3_TABLES = {"orders", "order_items"}
+ORDER = (
+    "INSERT INTO orders (public_ref, cart_id, reservation_id, status, version_hash, currency, subtotal_minor, "
+    "shipping_minor, total_minor, ship_country, shipping_zone, lang, hold_expires_at, created_at, updated_at, "
+    "status_changed_at) "
+    "SELECT :ref, r.cart_id, r.id, 'pending_approval', :hash, 'USD', 5000, 1500, 6500, 'FR', 'europe', 'en', "
+    "'2026-11-07 09:30:00', '2026-11-07 09:00:00', '2026-11-07 09:00:00', '2026-11-07 09:00:00' "
+    "FROM reservations r WHERE r.status = :status"
+)
+ADOPT = "UPDATE reservations SET status = 'order_hold'"
+SECOND_ACTIVE = (
+    "INSERT INTO reservations (public_id, cart_id, cart_version, status, created_at, expires_at) "
+    "SELECT :public_id, id, 2, 'active', '2026-11-07 09:00:00', '2026-11-07 09:15:00' FROM carts"
+)
+LINKED_SALE = (
+    "INSERT INTO inventory_movements (variant_id, delta_on_hand, delta_reserved, on_hand_after, "
+    "reserved_after, reason, reservation_id, created_at) "
+    "SELECT v.id, :on_hand, :reserved, 9, 0, 'sale', r.id, CURRENT_TIMESTAMP "
+    "FROM variants v, reservations r WHERE v.sku = 'MIG-1'"
+)
+UNLINKED_SALE = (
+    "INSERT INTO inventory_movements (variant_id, delta_on_hand, delta_reserved, on_hand_after, "
+    "reserved_after, reason, created_at) "
+    "SELECT id, -1, -1, 9, 0, 'sale', CURRENT_TIMESTAMP FROM variants WHERE sku = 'MIG-1'"
+)
+RESERVATION_CHECKS = {
+    "ck_reservations_status",
+    "ck_reservations_public_id_length",
+    "ck_reservations_cart_version_non_negative",
+    "ck_reservations_expires_after_creation",
+    "ck_reservations_ended_at_matches_status",
+}
+
+
+def _order(url: str, ref: str, status: str) -> None:
+    _execute(url, ORDER, {"ref": ref, "hash": "d" * 64, "status": status})
+
+
+def _rows(url: str, query: str) -> list[tuple[object, ...]]:
+    engine = create_db_engine(url)
+    try:
+        with engine.connect() as connection:
+            return [tuple(row) for row in connection.execute(text(query))]
+    finally:
+        engine.dispose()
+
+
+def _reservation_rows(url: str) -> list[tuple[object, ...]]:
+    return _rows(url, "SELECT id, public_id, cart_id, cart_version, status, ended_at FROM reservations ORDER BY id")
+
+
+def _checks(url: str, table: str) -> set[str]:
+    engine = create_db_engine(url)
+    try:
+        return {item["name"] for item in inspect(engine).get_check_constraints(table)}
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_to_0004_preserves_reservations_movements_and_the_partial_index(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, M2_HEAD)
+    _seed_m1_stock(database_url)
+    _hold_stock(database_url)
+    reservations, movements = _reservation_rows(database_url), _movement_rows(database_url)
+
+    command.upgrade(config, "0004_orders")
+
+    assert _reservation_rows(database_url) == reservations  # every row, unchanged
+    assert _movement_rows(database_url) == movements
+    schema = MovementSchema(database_url)
+    assert schema.tables >= M2_TABLES | M3_TABLES
+    assert schema.checks == M2_MOVEMENT_CHECKS
+    assert schema.foreign_keys == {VARIANT_FK, RESERVATION_FK}
+    assert _checks(database_url, "reservations") == RESERVATION_CHECKS
+    # The rebuilt reservations table still allows only one active reservation per cart ...
+    with pytest.raises(IntegrityError):
+        _execute(database_url, SECOND_ACTIVE, {"public_id": "e" * 32})
+    # ... and an adopted one no longer counts as active, so the cart can hold a new one.
+    _execute(database_url, ADOPT)
+    _order(database_url, "c" * 32, "order_hold")
+    _execute(database_url, SECOND_ACTIVE, {"public_id": "e" * 32})
+    # A second open order for the same cart is refused (partial unique index on open statuses).
+    with pytest.raises(IntegrityError):
+        _order(database_url, "f" * 32, "active")
+
+
+@pytest.mark.parametrize(
+    ("statement", "params"),
+    [
+        (UNLINKED_SALE, {}),  # a sale must name its reservation
+        (LINKED_SALE, {"on_hand": -1, "reserved": 0}),  # a sale moves both by the same amount
+        (LINKED_SALE, {"on_hand": 1, "reserved": 1}),  # ... downwards
+        ("UPDATE reservations SET status = 'order_hold', ended_at = CURRENT_TIMESTAMP", {}),  # holding: not ended
+        ("UPDATE reservations SET status = 'committed'", {}),  # ended: needs ended_at
+    ],
+)
+def test_0004_constraints_reject_inconsistent_rows(
+    database_url: str, statement: str, params: dict[str, object]
+) -> None:
+    command.upgrade(alembic_config(database_url), "head")
+    _seed_m1_stock(database_url)
+    _hold_stock(database_url)
+    with pytest.raises(IntegrityError):
+        _execute(database_url, statement, params)
+
+
+def test_0004_accepts_a_balanced_linked_sale(database_url: str) -> None:
+    command.upgrade(alembic_config(database_url), "head")
+    _seed_m1_stock(database_url)
+    _hold_stock(database_url)
+    _execute(database_url, "UPDATE reservations SET status = 'committed', ended_at = CURRENT_TIMESTAMP")
+    _execute(database_url, LINKED_SALE, {"on_hand": -1, "reserved": -1})
+
+
+def test_downgrade_refuses_when_order_history_exists(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    _seed_m1_stock(database_url)
+    _hold_stock(database_url)
+    _execute(database_url, ADOPT)
+    _order(database_url, "c" * 32, "order_hold")
+
+    with pytest.raises(RuntimeError, match="1 order"):
+        command.downgrade(config, M2_HEAD)
+
+    assert revision_of(database_url) == "0004_orders"
+    assert MovementSchema(database_url).tables >= M3_TABLES
+    assert _rows(database_url, "SELECT public_ref, status FROM orders") == [("c" * 32, "pending_approval")]
+
+
+def test_downgrade_0004_without_orders_restores_0003(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    _seed_m1_stock(database_url)
+    _hold_stock(database_url)  # cart reservations are 0003's history and survive
+    reservations, movements = _reservation_rows(database_url), _movement_rows(database_url)
+
+    command.downgrade(config, M2_HEAD)
+
+    assert revision_of(database_url) == M2_HEAD
+    schema = MovementSchema(database_url)
+    assert not schema.tables & M3_TABLES
+    assert schema.checks == M2_MOVEMENT_CHECKS
+    assert _checks(database_url, "reservations") == RESERVATION_CHECKS
+    assert _reservation_rows(database_url) == reservations
+    assert _movement_rows(database_url) == movements
+    with pytest.raises(IntegrityError):
+        _execute(database_url, ADOPT)  # the 0003 status list is back
+    with pytest.raises(IntegrityError):
+        _execute(database_url, SECOND_ACTIVE, {"public_id": "e" * 32})  # and the partial index
+
+    command.upgrade(config, "head")
+    assert revision_of(database_url) == head_revision()
+    assert _reservation_rows(database_url) == reservations
+
+
+# --- SQLite migrations: foreign keys off only inside the migration (alembic/env.py) -------------
+
+
+@pytest.fixture
+def sqlite_url(tmp_path: Path) -> str:
+    return f"sqlite:///{(tmp_path / 'fk.db').as_posix()}"
+
+
+@pytest.fixture
+def migration_fk_states() -> Iterator[list[int]]:
+    """``PRAGMA foreign_keys`` of every pooled connection as it is checked back in."""
+    states: list[int] = []
+
+    def record(dbapi_connection: Any, _record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            states.append(cursor.execute("PRAGMA foreign_keys").fetchone()[0])
+        finally:
+            cursor.close()
+
+    event.listen(Pool, "checkin", record)
+    yield states
+    event.remove(Pool, "checkin", record)
+
+
+def _orphan_item_rejected(url: str) -> None:
+    with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+        _execute(
+            url,
+            "INSERT INTO reservation_items (reservation_id, variant_id, quantity) VALUES (888888, 888888, 1)",
+        )
+
+
+def test_sqlite_upgrade_through_0004_leaves_foreign_keys_enforced(
+    sqlite_url: str, migration_fk_states: list[int]
+) -> None:
+    config = alembic_config(sqlite_url)
+    command.upgrade(config, M2_HEAD)
+    _seed_m1_stock(sqlite_url)
+    _hold_stock(sqlite_url)  # rows that reference reservations, so 0004's rebuild needs FKs off
+    migration_fk_states.clear()
+
+    command.upgrade(config, "0004_orders")
+
+    assert migration_fk_states, "no migration connection was checked in"
+    assert set(migration_fk_states) == {1}  # restored before the connection went back to the pool
+    _orphan_item_rejected(sqlite_url)  # and enforced on fresh connections
+
+
+def test_sqlite_foreign_key_check_fails_the_migration_and_still_restores_enforcement(
+    sqlite_url: str, migration_fk_states: list[int]
+) -> None:
+    config = alembic_config(sqlite_url)
+    command.upgrade(config, M2_HEAD)
+    with sqlite3.connect(make_url(sqlite_url).database) as raw:  # an orphan, written with FKs off
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute("INSERT INTO reservation_items (reservation_id, variant_id, quantity) VALUES (999999, 999999, 1)")
+    raw.close()
+    migration_fk_states.clear()
+
+    with pytest.raises(RuntimeError, match="foreign key violation"):
+        command.upgrade(config, "0004_orders")
+
+    assert migration_fk_states
+    assert set(migration_fk_states) == {1}
+    # The whole revision rolled back: not recorded, no half-built scratch tables, 0003 schema intact.
+    assert revision_of(sqlite_url) == M2_HEAD
+    tables = MovementSchema(sqlite_url).tables
+    assert not {name for name in tables if name.startswith("_alembic_tmp")}
+    assert not tables & M3_TABLES
+    assert _checks(sqlite_url, "reservations") == RESERVATION_CHECKS
+    [(definition,)] = _rows(sqlite_url, "SELECT sql FROM sqlite_master WHERE name = 'reservations'")
+    assert "order_hold" not in str(definition)  # the 0003 table, not the rebuilt one
+    _orphan_item_rejected(sqlite_url)
