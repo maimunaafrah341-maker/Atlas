@@ -12,6 +12,7 @@ tests can assert PayPal captured once and Atlas committed stock once.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from typing import Any
 
@@ -23,7 +24,8 @@ from app.clock import FixedClock
 from app.domain.orders.holds import expire_order_if_due
 from app.domain.orders.models import Order
 from app.domain.orders.service import PaymentInProgress, cancel_order, create_order
-from app.domain.payments.models import Payment
+from app.domain.payments.models import Payment, PayPalWebhookEvent
+from app.domain.payments.paypal import PayPalUnavailable
 from app.domain.payments.service import (
     CAPTURE_MARGIN,
     OrderNotPayable,
@@ -31,11 +33,13 @@ from app.domain.payments.service import (
     finalize,
     start_paypal_checkout,
 )
+from app.domain.payments.webhooks import COMPLETED, WebhookRetryLater, handle_webhook
 from app.domain.reservations.models import Reservation
 from app.domain.reservations.service import reserve_cart
 from tests import fake_paypal as fake
 from tests.conftest import TEST_DATABASE_URL
 from tests.factories import V, make_product
+from tests.integration.test_paypal_webhooks import TRANSMISSION
 from tests.integration.test_reservation_concurrency import (  # noqa: F401  (fixtures: engine, factory, race, clock)
     RESULT_TIMEOUT,
     Race,
@@ -227,4 +231,118 @@ def test_c4_expiry_and_capture_claim_never_both_apply(
     else:  # the claim won: expiry no longer applies to a capturing order
         assert captured.result().result == "paid"
         assert order_state(factory) == ("paid", "committed")
+    check_invariants(factory)
+
+
+# --- W: PayPal webhooks (M3.3) ----------------------------------------------------------------------
+
+
+def completed_event(ref: str, paypal_order_id: str, event_id: str = "WH-RACE") -> bytes:
+    resource = {
+        "id": "CAPTURE-CLAIMED",
+        "status": "COMPLETED",
+        "invoice_id": ref,
+        "supplementary_data": {"related_ids": {"order_id": paypal_order_id}},
+    }
+    return json.dumps({"id": event_id, "event_type": COMPLETED, "resource": resource}).encode("utf-8")
+
+
+def webhook(raw: bytes, paypal: fake.FakePayPal, clock: FixedClock) -> Any:
+    return lambda s: handle_webhook(
+        s, raw, TRANSMISSION, gateway=paypal, webhook_id=fake.WEBHOOK_ID, merchant_id=MERCHANT, clock=clock
+    )
+
+
+def event_row(factory: sessionmaker[Session]) -> tuple[int, str | None, bool]:
+    with factory() as session:
+        row = session.execute(select(PayPalWebhookEvent)).scalar_one()
+        return row.deliveries, row.outcome, row.processed_at is not None
+
+
+def lost_capture(factory: sessionmaker[Session], clock: FixedClock, paypal: fake.FakePayPal) -> tuple[int, str, str]:
+    cart_id, ref, paypal_order_id = approved_order(factory, clock, paypal)
+    paypal.capture_outcomes.append(fake.TIMEOUT_AFTER_CAPTURE)
+    with factory() as session:
+        assert capture(cart_id, ref, paypal_order_id, paypal, clock)(session).result == "processing"
+    return cart_id, ref, paypal_order_id
+
+
+def test_w1_concurrent_deliveries_of_one_event_commit_once_and_count_every_delivery(
+    engine: Engine, factory: sessionmaker[Session], race: Race, clock: FixedClock
+) -> None:
+    setup(factory, shop)
+    paypal = fake.FakePayPal()
+    cart_id, ref, paypal_order_id = lost_capture(factory, clock, paypal)
+    raw = completed_event(ref, paypal_order_id)
+
+    hold = blocker(engine, "SELECT id FROM carts WHERE id = :id FOR NO KEY UPDATE", id=cart_id)
+    for _ in range(4):
+        race.start(webhook(raw, paypal, clock))
+    wait_for_lock_waiters(engine, 4, race.futures)  # all four recorded, reconciled, and at finalize
+    hold.rollback()
+    hold.close()
+
+    outcomes = race.outcomes()
+    assert [o for o in outcomes if isinstance(o, BaseException)] == []
+    assert {o.outcome for o in outcomes} == {"paid"}
+    assert order_state(factory) == ("paid", "committed")
+    assert movement_reasons(factory).count("sale") == 1
+    assert payments(factory) == 1
+    assert event_row(factory) == (4, "paid", True)
+    assert paypal.captures_made == 1
+    assert len(paypal.calls_to("capture_order")) == 1  # no webhook captured
+    check_invariants(factory)
+
+
+def test_w2_concurrent_redeliveries_never_lose_a_delivery_count(
+    engine: Engine, factory: sessionmaker[Session], race: Race, clock: FixedClock
+) -> None:
+    setup(factory, shop)
+    paypal = fake.FakePayPal()
+    _cart_id, ref, paypal_order_id = lost_capture(factory, clock, paypal)
+    raw = completed_event(ref, paypal_order_id)
+    paypal.get_failures.append(PayPalUnavailable("ReadTimeout"))
+    with factory() as session, pytest.raises(WebhookRetryLater):
+        webhook(raw, paypal, clock)(session)  # recorded, not processed
+    assert event_row(factory) == (1, None, False)
+
+    hold = blocker(engine, "SELECT id FROM paypal_webhook_events FOR UPDATE")
+    for _ in range(5):
+        race.start(webhook(raw, paypal, clock))
+    wait_for_lock_waiters(engine, 5, race.futures)  # all five at the delivery upsert
+    hold.rollback()
+    hold.close()
+
+    outcomes = race.outcomes()
+    assert [o for o in outcomes if isinstance(o, BaseException)] == []
+    assert {o.outcome for o in outcomes} == {"paid"}
+    assert event_row(factory) == (6, "paid", True)  # 1 + 5: no increment lost
+    assert order_state(factory) == ("paid", "committed")
+    assert movement_reasons(factory).count("sale") == 1
+    check_invariants(factory)
+
+
+def test_w3_a_webhook_racing_the_capture_response_commits_once(
+    engine: Engine, factory: sessionmaker[Session], race: Race, clock: FixedClock
+) -> None:
+    setup(factory, shop)
+    paypal = fake.FakePayPal()
+    cart_id, ref, paypal_order_id = approved_order(factory, clock, paypal)
+
+    hold = blocker(engine, "SELECT id FROM carts WHERE id = :id FOR NO KEY UPDATE", id=cart_id)
+    captured = race.start(capture(cart_id, ref, paypal_order_id, paypal, clock))
+    wait_for_lock_waiters(engine, 1, race.futures)  # captured at PayPal, waiting to finalize
+    assert paypal.captures_made == 1
+    notified = race.start(webhook(completed_event(ref, paypal_order_id), paypal, clock))
+    wait_for_lock_waiters(engine, 2, race.futures)  # the webhook reached finalize too
+    hold.rollback()
+    hold.close()
+
+    race.outcomes()
+    assert captured.result().result == "paid"
+    assert notified.result().outcome == "paid"
+    assert order_state(factory) == ("paid", "committed")
+    assert movement_reasons(factory).count("sale") == 1
+    assert payments(factory) == 1
+    assert event_row(factory) == (1, "paid", True)
     check_invariants(factory)
