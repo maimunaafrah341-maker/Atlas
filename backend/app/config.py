@@ -20,6 +20,8 @@ REPO_DIR = BACKEND_DIR.parent
 DEFAULT_SQLITE_PATH = BACKEND_DIR / "var" / "atlas.db"
 # PayPal's documented merchant (payer) id format: 13 characters.
 PAYPAL_MERCHANT_ID_PATTERN = re.compile(r"^[2-9A-HJ-NP-Z]{13}$")
+# PayPal's documented webhook id schema (Webhooks v1): alphanumeric, at most 50 characters.
+PAYPAL_WEBHOOK_ID_PATTERN = re.compile(r"[A-Za-z0-9]{1,50}")
 
 
 class Environment(StrEnum):
@@ -74,6 +76,10 @@ class Settings(BaseSettings):
     paypal_client_secret: SecretStr = SecretStr("")  # never logged or shown (SecretStr repr)
     # The Sandbox business account's merchant id; every capture's payee must equal it.
     paypal_merchant_id: str = ""
+    # M3.3: the id of the Sandbox app's webhook, which PayPal's signature verification API needs.
+    # Without it (or without payments) the webhook endpoint fails closed; capture and
+    # reconciliation (M3.2) keep working.
+    paypal_webhook_id: str = ""
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -140,6 +146,19 @@ class Settings(BaseSettings):
     @property
     def payments_enabled(self) -> bool:
         return self.paypal_problem is None
+
+    @property
+    def paypal_webhook_problem(self) -> str | None:
+        """Why PayPal webhooks can't be verified (and are refused), or None. Never echoes a value."""
+        if self.paypal_problem is not None:
+            return self.paypal_problem
+        if not PAYPAL_WEBHOOK_ID_PATTERN.fullmatch(self.paypal_webhook_id.strip()):
+            return "PAYPAL_WEBHOOK_ID must be the Sandbox webhook's id (alphanumeric, at most 50 characters)"
+        return None
+
+    @property
+    def webhooks_enabled(self) -> bool:
+        return self.paypal_webhook_problem is None
 
     @property
     def order_hold(self) -> timedelta:

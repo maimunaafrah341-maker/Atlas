@@ -9,7 +9,10 @@ It models the behaviour the payment rules depend on:
   ``INSTRUMENT_DECLINED`` error (no capture created), a server error before anything happens, or
   a timeout **after** PayPal captured (the response is lost);
 - tamper hooks that change what the capture record reports (amount, currency, invoice id,
-  merchant, related order), for the verification tests.
+  merchant, related order), for the verification tests;
+- webhook signature verification (M3.3): ``SUCCESS`` only for the configured webhook id, unless
+  a scripted result (False = ``FAILURE``, or an exception) is queued. The exact event bytes it
+  was given are kept, so tests can check they were passed on unchanged.
 
 Thread-safe, and it counts real capture side effects, so concurrency tests can assert that
 PayPal captured exactly once.
@@ -29,9 +32,11 @@ from app.domain.payments.paypal import (
     PayPalOrder,
     PayPalRejected,
     PayPalUnavailable,
+    WebhookTransmission,
 )
 
 MERCHANT_ID = "ABCDEFGH23456"
+WEBHOOK_ID = "8PT597110X687430LKGECATA"
 
 # Next-capture outcomes.
 COMPLETE = "complete"
@@ -53,8 +58,11 @@ class _Order:
 
 
 class FakePayPal:
-    def __init__(self, merchant_id: str = MERCHANT_ID) -> None:
+    def __init__(self, merchant_id: str = MERCHANT_ID, webhook_id: str = WEBHOOK_ID) -> None:
         self.merchant_id = merchant_id
+        self.webhook_id = webhook_id
+        self.verify_outcomes: list[bool | Exception] = []  # consumed one per verification call
+        self.verified_events: list[bytes] = []  # the raw event bytes each verification received
         self.orders: dict[str, _Order] = {}
         self.captures: dict[str, CaptureRecord] = {}
         self.capture_outcomes: list[str] = []  # consumed one per capture call; default COMPLETE
@@ -149,6 +157,17 @@ class FakePayPal:
                 raise self.get_failures.pop(0)
             record = self.captures[capture_id]
             return self.tamper(record) if self.tamper else record
+
+    def verify_webhook_signature(self, transmission: WebhookTransmission, *, webhook_id: str, raw_event: bytes) -> bool:
+        with self._lock:
+            self.calls.append(("verify_webhook_signature", transmission.transmission_id, None))
+            self.verified_events.append(raw_event)
+            if self.verify_outcomes:
+                outcome = self.verify_outcomes.pop(0)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+            return webhook_id == self.webhook_id
 
     # Internals --------------------------------------------------------------------------------
 

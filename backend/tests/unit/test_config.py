@@ -116,3 +116,35 @@ def test_the_client_secret_never_appears_in_repr() -> None:
     result = settings(**SANDBOX)
     assert "client-secret-value" not in repr(result)
     assert "client-secret-value" not in str(result.model_dump())
+
+
+# --- M3.3: the webhook id ----------------------------------------------------------------------
+
+WEBHOOK_ID = "8PT597110X687430LKGECATA"
+
+
+@pytest.mark.parametrize("webhook_id", [WEBHOOK_ID, "a", "abc123XYZ", "A" * 50, f" {WEBHOOK_ID} "])
+def test_webhooks_need_payments_and_an_alphanumeric_webhook_id(webhook_id: str) -> None:
+    result = settings(**SANDBOX, paypal_webhook_id=webhook_id)
+    assert result.webhooks_enabled
+    assert result.paypal_webhook_problem is None
+
+
+@pytest.mark.parametrize(
+    "webhook_id",
+    ["", " ", "A" * 51, "WH-123", "abc def", "abc_def", "ab\ncd", "\uff11\uff12\uff13", "\u00c0BC", "abc/def"],
+)
+def test_a_missing_or_malformed_webhook_id_disables_only_webhooks(webhook_id: str) -> None:
+    result = settings(**SANDBOX, paypal_webhook_id=webhook_id)  # never raises: the shop must still start
+    assert result.payments_enabled  # M3.2 capture and reconciliation keep working
+    assert not result.webhooks_enabled
+    assert result.paypal_webhook_problem is not None
+    assert "PAYPAL_WEBHOOK_ID" in result.paypal_webhook_problem
+    if webhook_id.strip():
+        assert webhook_id.strip() not in result.paypal_webhook_problem  # the configured value isn't echoed
+
+
+def test_webhooks_are_off_whenever_payments_are_off() -> None:
+    result = settings(**{**SANDBOX, "paypal_mode": "live"}, paypal_webhook_id=WEBHOOK_ID)
+    assert not result.webhooks_enabled
+    assert result.paypal_webhook_problem == result.paypal_problem

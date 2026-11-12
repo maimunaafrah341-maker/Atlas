@@ -1,4 +1,5 @@
-"""PayPal Sandbox REST client: OAuth client credentials and Orders v2 / Payments v2 (M3.2, ADR-026).
+"""PayPal Sandbox REST client: OAuth client credentials, Orders v2 / Payments v2 (M3.2, ADR-026) and
+webhook signature verification (M3.3).
 
 **Sandbox only (ADR-019).** The host is the constant below; there is no setting that changes
 it, so this code cannot reach PayPal's live API.
@@ -22,6 +23,7 @@ client secret, the access token or a response body.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -72,6 +74,18 @@ class CaptureRecord:
     debug_id: str | None = None
 
 
+@dataclass(frozen=True)
+class WebhookTransmission:
+    """The ``PAYPAL-*`` headers of one webhook delivery, passed on unchanged to PayPal's
+    verification API (M3.3). PayPal itself fetches ``cert_url``; Atlas never does."""
+
+    auth_algo: str
+    cert_url: str
+    transmission_id: str
+    transmission_sig: str
+    transmission_time: str
+
+
 # --- Errors ------------------------------------------------------------------------------------
 
 
@@ -102,6 +116,46 @@ class PayPalGateway(Protocol):
     def get_order(self, paypal_order_id: str) -> PayPalOrder: ...
 
     def get_capture(self, capture_id: str) -> CaptureRecord: ...
+
+    def verify_webhook_signature(
+        self, transmission: WebhookTransmission, *, webhook_id: str, raw_event: bytes
+    ) -> bool: ...
+
+
+# --- Webhook verification body -----------------------------------------------------------------
+
+
+def _not_json(constant: str) -> object:
+    raise ValueError(f"{constant} is not JSON")
+
+
+def webhook_verification_body(transmission: WebhookTransmission, *, webhook_id: str, raw_event: bytes) -> bytes:
+    """The ``verify-webhook-signature`` request, with the received event bytes embedded **verbatim**.
+
+    PayPal checks the signature over the event exactly as it sent it; parsing and re-serialising
+    the event (key order, spacing, number formatting, escapes) can make a genuine event fail. So
+    the event is only checked to be exactly one strict JSON object, in UTF-8, and then spliced in
+    as-is. The other fields are serialised by ``json.dumps``, so no header value can add or
+    replace a field.
+    """
+    try:
+        event = json.loads(raw_event.decode("utf-8"), parse_constant=_not_json)  # BOM, NaN: refused
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("the webhook body is not a JSON object") from None
+    if not isinstance(event, dict):
+        raise ValueError("the webhook body is not a JSON object")
+    fields = json.dumps(
+        {
+            "auth_algo": transmission.auth_algo,
+            "cert_url": transmission.cert_url,
+            "transmission_id": transmission.transmission_id,
+            "transmission_sig": transmission.transmission_sig,
+            "transmission_time": transmission.transmission_time,
+            "webhook_id": webhook_id,
+        },
+        separators=(",", ":"),
+    )
+    return fields[:-1].encode("utf-8") + b',"webhook_event":' + raw_event + b"}"
 
 
 # --- Money -------------------------------------------------------------------------------------
@@ -219,6 +273,19 @@ class SandboxPayPalClient:
         data, debug_id = self._call("GET", f"/v2/payments/captures/{_resource_id(capture_id)}")
         return parse_capture(data, debug_id)
 
+    # Webhooks v1 (M3.3) ------------------------------------------------------------------------
+
+    def verify_webhook_signature(self, transmission: WebhookTransmission, *, webhook_id: str, raw_event: bytes) -> bool:
+        """True only when PayPal answers ``verification_status: SUCCESS``.
+
+        ``FAILURE`` (or any other answer) is False. Transport failures and 5xx raise
+        ``PayPalUnavailable``; a 4xx raises ``PayPalRejected``. ValueError if ``raw_event`` isn't
+        one JSON object (nothing is sent).
+        """
+        content = webhook_verification_body(transmission, webhook_id=webhook_id, raw_event=raw_event)
+        data, _debug_id = self._call("POST", "/v1/notifications/verify-webhook-signature", content=content)
+        return data.get("verification_status") == "SUCCESS"
+
     # Plumbing ----------------------------------------------------------------------------------
 
     def _access_token(self, *, refresh: bool = False) -> str:
@@ -246,17 +313,26 @@ class SandboxPayPalClient:
             return token
 
     def _call(
-        self, method: str, path: str, *, json: Mapping[str, Any] | None = None, request_id: str | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Mapping[str, Any] | None = None,
+        content: bytes | None = None,
+        request_id: str | None = None,
     ) -> tuple[Mapping[str, Any], str | None]:
+        """``json`` is serialised by httpx; ``content`` is an already-built JSON body, sent byte for byte."""
         for attempt in (1, 2):
             headers = {"Authorization": f"Bearer {self._access_token(refresh=attempt == 2)}"}
             if json is not None:
                 headers["Content-Type"] = "application/json"
                 headers["Prefer"] = "return=representation"
+            elif content is not None:
+                headers["Content-Type"] = "application/json"
             if request_id is not None:
                 headers["PayPal-Request-Id"] = request_id
             try:
-                response = self._http.request(method, path, json=json, headers=headers)
+                response = self._http.request(method, path, json=json, content=content, headers=headers)
             except httpx.TransportError as error:  # includes timeouts: outcome unknown
                 raise PayPalUnavailable(f"PayPal {method} {path} failed: {type(error).__name__}") from None
             debug_id = response.headers.get("paypal-debug-id")
