@@ -123,13 +123,13 @@ python scripts/smoke_test.py https://<service>.onrender.com --expect-dialect pos
 On the Shop page, **Describe what you need** accepts a request such as *"I'm looking for a lightweight navy jacket in medium."* (any of the five catalogue languages).
 
 1. The frontend sends it to `POST /api/discovery`, which is same-origin, read-only, sets no cookie and returns `no-store`.
-2. The backend asks **Google Gemini, model `gemini-3.8-flash`**, for a structured intent. The request uses a JSON response schema limited to the catalogue's own codes: categories, sizes, colours and tags, plus at most four keywords. Email addresses and long numbers are removed from the text first. Nothing else is sent: no cart, payer, address or payment data.
+2. The backend asks **Google Gemini, model `gemini-3.8-flash`**, for a structured intent. If Gemini is unavailable or slower than 5 seconds, it asks **Groq, model `openai/gpt-oss-20b`** (strict JSON-schema output) instead. The request uses a JSON response schema limited to the catalogue's own codes: categories, sizes, colours and tags, plus at most four keywords. Email addresses and long numbers are removed from the text first. Nothing else is sent: no cart, payer, address or payment data.
 3. The backend **validates every field** in Python.
    - The reply must have exactly those five fields, with known codes only.
    - Any extra field (a product, price, stock, shipping or payment value) rejects the whole reply.
    - A keyword is kept only if the shopper actually wrote it.
 4. The validated intent becomes ordinary catalogue filters for **the same deterministic search as the Shop page** (`search_products`). Product names, prices and stock states all come from the database. The model never chooses products or prices and changes nothing. If nothing matches, the extra words, then the features, are dropped, and the response says so.
-5. **Fallback:** if Gemini isn't configured, times out (10 s), returns an error or returns invalid output (after one retry), a deterministic keyword parser builds the intent instead. Search keeps working, and the page says that keyword matching was used.
+5. **Fallback:** if neither model is configured or both fail (timeout, error, or invalid output after one retry), a deterministic keyword parser builds the intent instead. Search keeps working, and the page says that keyword matching was used.
 
 The panel shows how the request was understood, the matching products as ordinary product cards, and **Apply as shop filters**, which hands over to the normal filters. Design: [ADR-028](docs/DECISIONS.md).
 
@@ -139,13 +139,14 @@ The panel shows how the request was understood, the matching products as ordinar
 LLM_PROVIDER=gemini
 LLM_MODEL=gemini-3.8-flash
 GEMINI_API_KEY=<your key>
+GROQ_API_KEY=<your Groq key>      # optional fallback, https://console.groq.com/keys
 ```
 
 Without these settings the backend logs `gemini discovery disabled` and discovery uses keyword matching.
 
-**Tests and CI:** they use a fake provider and a mocked HTTP transport, and never call Google.
+**Tests and CI:** they use fake providers and a mocked HTTP transport, and never call Google or Groq.
 
-**Hosted demo:** the deployed site uses Gemini only once `LLM_PROVIDER`, `LLM_MODEL` and `GEMINI_API_KEY` are set in the Render dashboard. Until then the hosted panel says it is using keyword matching.
+**Hosted demo:** the deployed site uses the models only once `LLM_PROVIDER`, `LLM_MODEL`, `GEMINI_API_KEY` and `GROQ_API_KEY` are set in the Render dashboard. Until then the hosted panel says it is using keyword matching.
 
 ## PayPal Sandbox payments (M3.2)
 

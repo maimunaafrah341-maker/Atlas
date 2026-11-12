@@ -151,3 +151,9 @@ Invariant: `stock_reserved = SUM(items of active + order_hold reservations)`. Lo
 
 *ADR-027 is reserved for the M3.3 PayPal webhook design, which is on its own branch.*
 
+*Update (M5, 2026-11-12):* Groq is now the fallback model. During the live test, Gemini 3.8 Flash answered 503 "high demand" and then timed out. Groq, model `openai/gpt-oss-20b` in strict JSON-schema mode, answered the same requests correctly in about 0.5 s.
+- **Order:** Gemini, then Groq, then the keyword parser. Groq is enabled whenever `GROQ_API_KEY` is set.
+- **Handover:** with a fallback behind it, Gemini gets a 5-second timeout and isn't retried on an outage, so the hand-over is quick. The last model retries one transient error.
+- **Validation:** every model's output goes through the same strict validation.
+- **Response:** `source` names the model that answered, and `fallback_reason` records why earlier ones didn't (for example `gemini: unavailable: timeout`).
+
