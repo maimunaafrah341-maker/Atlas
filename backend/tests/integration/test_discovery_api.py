@@ -39,7 +39,7 @@ def llm() -> FakeLLM:
 
 @pytest.fixture
 def api(seeded_url: str, llm: FakeLLM) -> Iterator[TestClient]:
-    with TestClient(create_app(make_settings(seeded_url), llm=llm)) as test_client:
+    with TestClient(create_app(make_settings(seeded_url), llms=[llm])) as test_client:
         yield test_client
 
 
@@ -103,7 +103,7 @@ def test_invalid_output_is_retried_once_then_falls_back_to_keywords(
     llm.replies.extend(["not json", intent_json(categories=["parkas"])])
     body = ask(api)
     assert len(llm.prompts) == 2  # bounded: one retry
-    assert (body["source"], body["model"], body["fallback_reason"]) == ("keywords", None, "invalid_output")
+    assert (body["source"], body["model"], body["fallback_reason"]) == ("keywords", None, "gemini: invalid_output")
     assert body["intent"]["categories"] == ["jackets"]
     assert body["intent"]["colours"] == ["navy"]
     assert body["intent"]["sizes"] == ["M"]
@@ -120,11 +120,11 @@ def test_one_invalid_reply_then_a_valid_one_uses_the_model(api: TestClient, llm:
 @pytest.mark.parametrize(
     ("failure", "attempts", "reason"),
     [
-        (LLMUnavailable("timeout"), 1, "unavailable: timeout"),
-        (LLMUnavailable("http 400"), 1, "unavailable: http 400"),
-        (LLMUnavailable("http 429", retryable=True), 2, "unavailable: http 429"),
-        (LLMUnavailable("http 503", retryable=True), 2, "unavailable: http 503"),
-        (LLMUnavailable("blocked"), 1, "unavailable: blocked"),
+        (LLMUnavailable("timeout"), 1, "gemini: unavailable: timeout"),
+        (LLMUnavailable("http 400"), 1, "gemini: unavailable: http 400"),
+        (LLMUnavailable("http 429", retryable=True), 2, "gemini: unavailable: http 429"),
+        (LLMUnavailable("http 503", retryable=True), 2, "gemini: unavailable: http 503"),
+        (LLMUnavailable("blocked"), 1, "gemini: unavailable: blocked"),
     ],
 )
 def test_an_unavailable_model_falls_back_to_keywords(
@@ -167,7 +167,7 @@ def test_model_output_cannot_inject_products_prices_stock_shipping_or_payment(
     poisoned = intent_json(categories=["jackets"], colours=["navy"], sizes=["M"], **injected)
     llm.replies.extend([poisoned, poisoned])
     body = ask(api)
-    assert (body["source"], body["fallback_reason"]) == ("keywords", "invalid_output")
+    assert (body["source"], body["fallback_reason"]) == ("keywords", "gemini: invalid_output")
     # The products are the catalogue's answer to the shopper's own words, nothing the model named.
     assert body["results"] == catalogue(session, categories=("jackets",), sizes=("M",), colours=("navy",))
     for item in body["results"]["items"]:
@@ -262,3 +262,58 @@ def test_invalid_requests_are_rejected_before_the_model(api: TestClient, llm: Fa
     response = api.post("/api/discovery", json=payload, headers={"Origin": ORIGIN})
     assert response.status_code == 422
     assert llm.prompts == []
+
+
+# --- Groq fallback ---------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def chain(seeded_url: str) -> Iterator[tuple[TestClient, FakeLLM, FakeLLM]]:
+    gemini, groq = FakeLLM(), FakeLLM(provider="groq", model="openai/gpt-oss-20b")
+    with TestClient(create_app(make_settings(seeded_url), llms=[gemini, groq])) as client:
+        yield client, gemini, groq
+
+
+def test_groq_answers_when_gemini_is_unavailable_without_retrying_gemini(
+    chain: tuple[TestClient, FakeLLM, FakeLLM], session: Session
+) -> None:
+    client, gemini, groq = chain
+    gemini.replies.extend([LLMUnavailable("http 503", retryable=True), NAVY_MEDIUM_JACKET])
+    groq.replies.append(NAVY_MEDIUM_JACKET)
+    body = ask(client)
+    assert (body["source"], body["model"]) == ("groq", "openai/gpt-oss-20b")
+    assert body["fallback_reason"] == "gemini: unavailable: http 503"
+    assert (len(gemini.prompts), len(groq.prompts)) == (1, 1)  # Gemini handed over at once
+    expected = catalogue(session, query="lightweight", categories=("jackets",), sizes=("M",), colours=("navy",))
+    assert body["results"] == expected
+
+
+def test_groq_output_is_validated_like_geminis(chain: tuple[TestClient, FakeLLM, FakeLLM]) -> None:
+    client, gemini, groq = chain
+    gemini.replies.extend([LLMUnavailable("timeout")])
+    poisoned = intent_json(categories=["jackets"], price_minor=1)
+    groq.replies.extend([poisoned, poisoned])
+    body = ask(client)
+    assert (body["source"], body["model"]) == ("keywords", None)
+    assert body["fallback_reason"] == "gemini: unavailable: timeout; groq: invalid_output"
+    assert len(groq.prompts) == 2  # one retry for invalid output
+    assert body["results"]["total"] >= 1
+
+
+def test_gemini_is_preferred_when_it_answers(chain: tuple[TestClient, FakeLLM, FakeLLM]) -> None:
+    client, gemini, groq = chain
+    gemini.replies.append(NAVY_MEDIUM_JACKET)
+    body = ask(client)
+    assert (body["source"], body["model"], body["fallback_reason"]) == ("gemini", MODEL, None)
+    assert groq.prompts == []
+
+
+def test_when_every_model_fails_search_still_works(chain: tuple[TestClient, FakeLLM, FakeLLM]) -> None:
+    client, gemini, groq = chain
+    gemini.replies.append(LLMUnavailable("timeout"))
+    groq.replies.extend([LLMUnavailable("http 503", retryable=True)] * 2)
+    body = ask(client)
+    assert body["source"] == "keywords"
+    assert body["fallback_reason"] == "gemini: unavailable: timeout; groq: unavailable: http 503"
+    assert len(groq.prompts) == 2  # the last model retries a transient error once
+    assert body["intent"]["categories"] == ["jackets"]

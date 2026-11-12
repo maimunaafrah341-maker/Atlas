@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from app.api import cart, catalog, checkout, discovery, health, shipping
 from app.clock import Clock, SystemClock
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
-from app.domain.discovery.llm import GeminiClient, StructuredLLM
+from app.domain.discovery.llm import PRIMARY_TIMEOUT, TIMEOUT, GeminiClient, GroqClient, StructuredLLM
 from app.domain.payments.paypal import PayPalGateway, SandboxPayPalClient
 from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
@@ -58,15 +58,22 @@ def _paypal_gateway(settings: Settings) -> PayPalGateway | None:
     )
 
 
-def _llm(settings: Settings) -> StructuredLLM | None:
-    """The Gemini client when configured; otherwise None (discovery uses the keyword parser)."""
+def _llms(settings: Settings) -> tuple[StructuredLLM, ...]:
+    """The discovery models in order: Gemini, then Groq as the fallback. Empty: keyword parser only."""
+    llms: list[StructuredLLM] = []
     problem = settings.llm_problem
-    if problem is not None:
+    if problem is None:
+        logger.info("gemini discovery enabled", extra={"model": settings.resolved_llm_model})
+        timeout = PRIMARY_TIMEOUT if settings.groq_problem is None else TIMEOUT
+        key = settings.gemini_api_key.get_secret_value().strip()
+        llms.append(GeminiClient(key, settings.resolved_llm_model, timeout=timeout))
+    else:
         configured = bool(settings.llm_provider.strip())
         (logger.error if configured else logger.info)("gemini discovery disabled", extra={"reason": problem})
-        return None
-    logger.info("gemini discovery enabled", extra={"model": settings.resolved_llm_model})
-    return GeminiClient(settings.gemini_api_key.get_secret_value().strip(), settings.resolved_llm_model)
+    if settings.groq_problem is None:
+        logger.info("groq discovery fallback enabled", extra={"model": settings.resolved_groq_model})
+        llms.append(GroqClient(settings.groq_api_key.get_secret_value().strip(), settings.resolved_groq_model))
+    return tuple(llms)
 
 
 def create_app(
@@ -74,9 +81,9 @@ def create_app(
     *,
     clock: Clock | None = None,
     paypal: PayPalGateway | None = None,
-    llm: StructuredLLM | None = None,
+    llms: Sequence[StructuredLLM] | None = None,
 ) -> FastAPI:
-    """``paypal`` and ``llm``: tests inject fakes; otherwise they come from the settings (or are None)."""
+    """``paypal`` and ``llms``: tests inject fakes; otherwise they come from the settings."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     engine = create_db_engine(settings.database_url)
@@ -91,8 +98,9 @@ def create_app(
         gateway = _app.state.paypal
         if isinstance(gateway, SandboxPayPalClient):
             gateway.close()
-        if isinstance(_app.state.llm, GeminiClient):
-            _app.state.llm.close()
+        for model in _app.state.llms:
+            if isinstance(model, GeminiClient | GroqClient):
+                model.close()
         engine.dispose()
 
     app = FastAPI(
@@ -110,8 +118,8 @@ def create_app(
     app.state.clock = clock or SystemClock()
     # M3.2: the PayPal gateway, or None when payments are disabled (payment endpoints answer 503).
     app.state.paypal = paypal if paypal is not None else _paypal_gateway(settings)
-    # M5: the LLM for discovery, or None (discovery then uses the deterministic keyword parser).
-    app.state.llm = llm if llm is not None else _llm(settings)
+    # M5: the discovery models in order (Gemini, Groq); empty means the deterministic keyword parser.
+    app.state.llms = tuple(llms) if llms is not None else _llms(settings)
 
     # Outermost: security headers on every response, and the last-resort JSON 500.
     app.add_middleware(SafetyMiddleware)

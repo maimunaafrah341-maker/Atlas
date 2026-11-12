@@ -449,8 +449,8 @@ export interface DiscoveryIntent {
 
 export interface Discovery {
   /** "gemini": Gemini's intent, validated by the backend. "keywords": the deterministic fallback. */
-  source: "gemini" | "keywords";
-  /** The Gemini model id, when source is "gemini". */
+  source: "gemini" | "groq" | "keywords";
+  /** The model id, when a model produced the intent ("groq" is the fallback when Gemini is unavailable). */
   model: string | null;
   /** Why the keyword parser was used ("not_configured", "invalid_output", "unavailable: …"). */
   fallback_reason: string | null;
@@ -470,7 +470,7 @@ function isDiscovery(value: unknown): value is Discovery {
   const intent = isRecord(value) ? value.intent : null;
   return (
     isRecord(value) &&
-    (value.source === "gemini" || value.source === "keywords") &&
+    (value.source === "gemini" || value.source === "groq" || value.source === "keywords") &&
     (value.model === null || typeof value.model === "string") &&
     (value.fallback_reason === null || typeof value.fallback_reason === "string") &&
     isRecord(intent) &&

@@ -90,7 +90,7 @@ describe("natural-language discovery", () => {
     stub(() => jsonResponse(discovery({ source: "keywords", model: null, fallback_reason: "unavailable: timeout" })));
     renderShop();
     await ask();
-    expect(await panel().findByText(/Gemini couldn’t answer just now, so your words were matched to the catalogue directly/)).toBeVisible();
+    expect(await panel().findByText(/The AI models couldn’t answer just now, so your words were matched to the catalogue directly/)).toBeVisible();
     expect(panel().queryByText(/Understood by Google Gemini/)).not.toBeInTheDocument();
   });
 
@@ -98,7 +98,14 @@ describe("natural-language discovery", () => {
     stub(() => jsonResponse(discovery({ source: "keywords", model: null, fallback_reason: "not_configured" })));
     renderShop();
     await ask();
-    expect(await panel().findByText(/Gemini isn’t configured on this server/)).toBeVisible();
+    expect(await panel().findByText(/AI isn’t configured on this server/)).toBeVisible();
+  });
+
+  it("names Groq when the fallback model answered", async () => {
+    stub(() => jsonResponse(discovery({ source: "groq", model: "openai/gpt-oss-20b", fallback_reason: "gemini: unavailable: timeout" })));
+    renderShop();
+    await ask();
+    expect(await panel().findByText(/Understood by Groq \(openai\/gpt-oss-20b\) because Gemini was unavailable/)).toBeVisible();
   });
 
   it("explains relaxed constraints and an empty result", async () => {

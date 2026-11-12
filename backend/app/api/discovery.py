@@ -40,8 +40,8 @@ class IntentOut(BaseModel):
 
 class DiscoveryOut(BaseModel):
     # "gemini": the model's intent, validated. "keywords": the deterministic parser.
-    source: Literal["gemini", "keywords"]
-    model: str | None = Field(description="The Gemini model id, when source is gemini")
+    source: Literal["gemini", "groq", "keywords"]
+    model: str | None = Field(description="The model id, when a model produced the intent")
     fallback_reason: str | None
     intent: IntentOut
     relaxed: list[Literal["keywords", "tags"]]
@@ -50,8 +50,8 @@ class DiscoveryOut(BaseModel):
 
 @router.post("", response_model=DiscoveryOut, dependencies=[SameOrigin])
 def post_discovery(body: DiscoveryIn, session: SessionDep, request: Request, response: Response) -> DiscoveryOut:
-    llm: StructuredLLM | None = request.app.state.llm
-    found = discover(session, body.query, lang=body.lang, llm=llm)
+    llms: tuple[StructuredLLM, ...] = request.app.state.llms
+    found = discover(session, body.query, lang=body.lang, llms=llms)
     response.headers["Cache-Control"] = "no-store"
     intent = found.intent
     return DiscoveryOut(

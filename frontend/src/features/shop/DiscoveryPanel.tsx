@@ -66,7 +66,7 @@ export function DiscoveryPanel({ language, onApply }: { language: Language; onAp
         <h2 id={`${id}-heading`} className="label-mono text-ink-muted">
           Describe what you need
         </h2>
-        <p className="label-mono text-[0.625rem] text-ink-subtle">Powered by Google Gemini · keyword fallback</p>
+        <p className="label-mono text-[0.625rem] text-ink-subtle">AI by Google Gemini · Groq fallback</p>
       </div>
       <form onSubmit={submit} noValidate className="mt-4">
         <label htmlFor={id} className="sr-only">
@@ -142,8 +142,9 @@ export function DiscoveryPanel({ language, onApply }: { language: Language; onAp
 
 function sourceNote(discovery: Discovery): string {
   if (discovery.source === "gemini") return `Understood by Google Gemini (${discovery.model ?? "Gemini"}), checked against the catalogue.`;
-  if (discovery.fallback_reason === "not_configured") return "Gemini isn’t configured on this server, so your words were matched to the catalogue directly.";
-  return "Gemini couldn’t answer just now, so your words were matched to the catalogue directly.";
+  if (discovery.source === "groq") return `Understood by Groq (${discovery.model ?? "Groq"}) because Gemini was unavailable, checked against the catalogue.`;
+  if (discovery.fallback_reason === "not_configured") return "AI isn’t configured on this server, so your words were matched to the catalogue directly.";
+  return "The AI models couldn’t answer just now, so your words were matched to the catalogue directly.";
 }
 
 function DiscoveryResults({
@@ -172,8 +173,8 @@ function DiscoveryResults({
   };
   return (
     <div className="mt-8">
-      <p className={`text-sm ${discovery.source === "gemini" ? "text-ink" : "text-ink-muted"}`}>
-        <span className={`mr-2 inline-block h-2 w-2 rounded-full align-middle ${discovery.source === "gemini" ? "bg-ok" : "bg-warn"}`} aria-hidden />
+      <p className={`text-sm ${discovery.source !== "keywords" ? "text-ink" : "text-ink-muted"}`}>
+        <span className={`mr-2 inline-block h-2 w-2 rounded-full align-middle ${discovery.source !== "keywords" ? "bg-ok" : "bg-warn"}`} aria-hidden />
         {sourceNote(discovery)}
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-2">

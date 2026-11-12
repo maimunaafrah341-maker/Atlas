@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.domain.discovery.llm import GeminiClient, LLMUnavailable, intent_schema
+from app.domain.discovery.llm import GeminiClient, GroqClient, LLMUnavailable, intent_json_schema, intent_schema
 
 KEY = "test-gemini-key-value-0123456789"
 SYSTEM = "system prompt"
@@ -165,3 +165,77 @@ def test_the_key_never_appears_in_the_settings_repr_or_problem() -> None:
     configured = settings(llm_provider="gemini", gemini_api_key=KEY, llm_model="nope")
     assert KEY not in repr(configured)
     assert KEY not in (configured.llm_problem or "")
+
+
+# --- Groq --------------------------------------------------------------------------------------------
+
+
+def groq(handler: Callable[[httpx.Request], httpx.Response]) -> GroqClient:
+    return GroqClient(KEY, "openai/gpt-oss-20b", transport=httpx.MockTransport(handler))
+
+
+def groq_reply(content: object, finish: str = "stop") -> httpx.Response:
+    return httpx.Response(200, json={"choices": [{"message": {"content": content}, "finish_reason": finish}]})
+
+
+def test_groq_sends_a_strict_json_schema_chat_completion() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return groq_reply('{"categories": []}')
+
+    assert groq(handler).generate_json(system=SYSTEM, user=USER, schema=intent_schema()) == '{"categories": []}'
+    (request,) = seen
+    assert str(request.url) == "https://api.groq.com/openai/v1/chat/completions"
+    assert request.headers["authorization"] == f"Bearer {KEY}"
+    assert KEY not in str(request.url)
+    body = json.loads(request.content)
+    assert body["model"] == "openai/gpt-oss-20b"
+    assert body["messages"] == [{"role": "system", "content": SYSTEM}, {"role": "user", "content": USER}]
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "shopping_intent", "strict": True, "schema": intent_json_schema()},
+    }
+
+
+def test_the_groq_schema_is_strict_mode_compatible() -> None:
+    schema = intent_json_schema()
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    assert schema["properties"]["colours"]["items"]["enum"][0] == "black"
+
+
+@pytest.mark.parametrize(
+    ("response", "reason", "retryable"),
+    [
+        (httpx.Response(401), "http 401", False),
+        (httpx.Response(429), "http 429", True),
+        (httpx.Response(503), "http 503", True),
+        (httpx.Response(200, text="nope"), "reply is not JSON", False),
+        (httpx.Response(200, json={"choices": []}), "no choices", False),
+        (groq_reply("{}", finish="length"), "finish length", False),
+        (groq_reply(None), "empty reply", False),
+        (groq_reply("  "), "empty reply", False),
+    ],
+)
+def test_groq_failures_are_unavailable(response: httpx.Response, reason: str, retryable: bool) -> None:
+    with pytest.raises(LLMUnavailable) as caught:
+        groq(lambda _: response).generate_json(system=SYSTEM, user=USER, schema=intent_schema())
+    assert (caught.value.reason, caught.value.retryable) == (reason, retryable)
+    assert KEY not in str(caught.value)
+
+
+def test_groq_needs_a_key_and_a_plain_model_id() -> None:
+    with pytest.raises(ValueError, match="key"):
+        GroqClient("", "openai/gpt-oss-20b")
+    with pytest.raises(ValueError, match="model"):
+        GroqClient(KEY, "openai/gpt-oss-20b?x=1")
+
+
+def test_groq_settings() -> None:
+    assert settings().groq_problem == "GROQ_API_KEY is not set"
+    assert settings(groq_api_key=KEY).groq_problem is None
+    assert settings(groq_api_key=KEY).resolved_groq_model == "openai/gpt-oss-20b"
+    assert settings(groq_api_key=KEY, groq_model="bad model").groq_problem is not None
+    assert KEY not in repr(settings(groq_api_key=KEY))

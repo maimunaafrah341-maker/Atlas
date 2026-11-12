@@ -23,6 +23,8 @@ PAYPAL_MERCHANT_ID_PATTERN = re.compile(r"^[2-9A-HJ-NP-Z]{13}$")
 # M5 (ADR-005): a Gemini model id; it becomes part of the API URL path, so nothing else is allowed.
 GEMINI_MODEL_PATTERN = re.compile(r"^gemini-[a-z0-9][a-z0-9.-]{0,62}$")
 DEFAULT_LLM_MODEL = "gemini-3.8-flash"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"  # strict structured outputs
+GROQ_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,80}$")
 
 
 class Environment(StrEnum):
@@ -82,6 +84,9 @@ class Settings(BaseSettings):
     llm_provider: str = ""
     llm_model: str = DEFAULT_LLM_MODEL
     gemini_api_key: SecretStr = SecretStr("")  # never logged or shown (SecretStr repr)
+    # The fallback model when Gemini is unavailable: enabled whenever GROQ_API_KEY is set.
+    groq_api_key: SecretStr = SecretStr("")  # never logged or shown
+    groq_model: str = DEFAULT_GROQ_MODEL
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -162,6 +167,19 @@ class Settings(BaseSettings):
         if not self.gemini_api_key.get_secret_value().strip():
             return "GEMINI_API_KEY is required"
         return None
+
+    @property
+    def groq_problem(self) -> str | None:
+        """Why the Groq fallback is off, or None. Never includes a value."""
+        if not self.groq_api_key.get_secret_value().strip():
+            return "GROQ_API_KEY is not set"
+        if not GROQ_MODEL_PATTERN.match(self.resolved_groq_model):
+            return "GROQ_MODEL must be a Groq model id such as openai/gpt-oss-20b"
+        return None
+
+    @property
+    def resolved_groq_model(self) -> str:
+        return self.groq_model.strip() or DEFAULT_GROQ_MODEL
 
     @property
     def resolved_llm_model(self) -> str:
