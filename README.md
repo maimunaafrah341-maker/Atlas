@@ -2,13 +2,21 @@
 
 Multilingual AI commerce copilot for global small businesses: conversational product discovery, grounded merchant knowledge, validated carts, PayPal Sandbox checkout and Make.com automation. *Atlas* is an internal codename.
 
-**Status: M1 (catalogue, inventory, shipping).** On top of the M0 foundation, this build has:
-- the demo catalogue: 20 products, 60 variants, 5 languages;
-- deterministic catalogue search and a product detail API;
-- audited inventory with a never-negative available-stock invariant;
-- shipping-rate lookup.
+**Live demo:** https://atlas-uema.onrender.com/ (Render free plan: the first request after a quiet period can take up to a minute while the service wakes up). Screenshots: [Demo](#demo).
 
-**No AI, retrieval, cart, checkout, PayPal or Make features are implemented yet.** See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+**Status: M3.2 (PayPal Sandbox payments).** On top of the M0 foundation, this build has:
+- **Catalogue (M1):** the demo catalogue (20 products, 60 variants, 5 languages), deterministic search, a product detail API, audited inventory with a never-negative available-stock invariant, and shipping-rate lookup.
+- **Cart (M2):** a cookie-identified cart API with time-limited stock reservations ([ADR-024](docs/DECISIONS.md)), and the frontend shopping bag.
+- **Orders (M3.1):** an immutable, hashed order snapshot that adopts the cart's reservation as its stock hold ([ADR-025](docs/DECISIONS.md)).
+- **PayPal Sandbox payments (M3.2):** the backend creates the PayPal order, captures it on the server, verifies the capture against PayPal's own record, reconciles unknown outcomes, and finalizes each payment once ([ADR-026](docs/DECISIONS.md)). It is verified with a real Sandbox purchase (see [Demo](#demo)). Sandbox only, USD only.
+
+**Not implemented yet:**
+- the frontend checkout step (the PayPal JavaScript buttons, M3.4); today a payment is driven through the API;
+- PayPal webhooks (M3.3);
+- Make.com automation;
+- the AI and retrieval features.
+
+See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 > **Demo data disclosure.** "Atlas Demo Outfitters" is a fictional, temporary brand. Products, specifications and prices are invented. The es, fr, de and pt-BR product text is **machine-generated and not reviewed by native speakers**; it is flagged `machine_translated` in the data and API. Shipping rates are **fictional demo pricing assumptions, not real or carrier-validated shipping costs**. The fictional merchant ships from India to international destinations only. This story detail makes no claim about PayPal account capabilities.
 
@@ -19,6 +27,17 @@ Multilingual AI commerce copilot for global small businesses: conversational pro
 | [DECISIONS.md](docs/DECISIONS.md) | Architecture decisions and the alternatives we rejected |
 | [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Milestones, accounts, risks, demo |
 | [MULTILINGUAL_REUSE_AUDIT.md](docs/MULTILINGUAL_REUSE_AUDIT.md) | Audit of prior multilingual code |
+
+## Demo
+
+Screens 1–6 were captured on 2026-11-12 from the app at the deployed commit (`ae6990e`), running locally against a freshly seeded database; screen 6 is PayPal's own **Sandbox** checkout for an order the Atlas backend created. Screens 7–8 are the evidence of the end-to-end Sandbox purchase run the same day: one Ridgeline Rain Shell (S, navy), USD 129.00 plus USD 20.00 shipping to FR, **USD 149.00** in total, with test accounts and no real money. The backend captured the approved order on the server, checked the capture against PayPal's record ([ADR-026](docs/DECISIONS.md)), committed the stock reservation and emptied the bag.
+
+| | |
+|---|---|
+| **1. Homepage**: establishes the visual identity.<br>![Atlas homepage](docs/screenshots/demo/01-homepage.png) | **2. Shop catalogue**: the product collection, with search and filters.<br>![Shop catalogue](docs/screenshots/demo/02-shop-catalogue.png) |
+| **3. Product detail**: real variant selection (colour, size, live stock state).<br>![Product detail with navy, size M selected](docs/screenshots/demo/03-product-detail.png) | **4. Shopping bag**: quantity and server-computed pricing.<br>![Shopping bag](docs/screenshots/demo/04-shopping-bag.png) |
+| **5. Active reservation**: the bag's stock is held, with a countdown.<br>![Bag with an active stock reservation](docs/screenshots/demo/05-active-reservation.png) | **6. PayPal checkout**: the USD 149.00 order on PayPal's Sandbox checkout.<br>![PayPal Sandbox checkout showing USD 149.00](docs/screenshots/demo/06-paypal-checkout.png) |
+| **7. Atlas paid order**: the backend's final result, order `paid`.<br>![Atlas order with status paid](docs/screenshots/demo/07-atlas-paid-order.png) | **8. PayPal Business activity**: independent evidence, payment **Completed**.<br>![PayPal Sandbox business activity: USD 149.00, Completed](docs/screenshots/demo/08-paypal-business-activity.png) |
 
 ## Stack
 
