@@ -31,12 +31,13 @@ SECURITY_HEADERS = {
 }
 
 
-# Personal, per-cookie responses: never stored by the browser or any cache, errors included.
-NO_STORE_PREFIX = "/api/cart"
+# Never stored by the browser or any cache, errors included: personal, per-cookie cart and order
+# responses, and PayPal webhook acknowledgements (M3.3).
+NO_STORE_PREFIXES = ("/api/cart", "/api/webhooks")
 
 
 def _no_store(path: str) -> bool:
-    return path == NO_STORE_PREFIX or path.startswith(NO_STORE_PREFIX + "/")
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in NO_STORE_PREFIXES)
 
 
 class SafetyMiddleware:

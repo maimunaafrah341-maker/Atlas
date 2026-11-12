@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.models  # noqa: F401  (register every table, so all foreign keys resolve in a fresh process)
-from app.api import cart, catalog, checkout, discovery, health, shipping
+from app.api import cart, catalog, checkout, discovery, health, shipping, webhooks
 from app.clock import Clock, SystemClock
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
@@ -53,6 +53,9 @@ def _paypal_gateway(settings: Settings) -> PayPalGateway | None:
         configured = settings.paypal_mode.strip() or settings.paypal_client_id.strip()
         (logger.error if configured else logger.info)("payments disabled", extra={"reason": problem})
         return None
+    if not settings.webhooks_enabled:
+        # Capture and reconcile work without webhooks; the webhook endpoint then answers 503.
+        logger.warning("paypal webhooks disabled", extra={"reason": settings.paypal_webhook_problem})
     return SandboxPayPalClient(
         settings.paypal_client_id.strip(), settings.paypal_client_secret.get_secret_value().strip()
     )
@@ -131,6 +134,7 @@ def create_app(
     app.include_router(checkout.router)
     app.include_router(checkout.config_router)
     app.include_router(discovery.router)
+    app.include_router(webhooks.router)
 
     dist = settings.frontend_dist_dir
     if dist is not None and (dist / "index.html").is_file():

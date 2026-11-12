@@ -44,6 +44,12 @@ Flow and state transitions (compare-and-set on ``orders.status`` each time):
 5. Still ``capturing`` or ``payment_pending`` ``RESOLUTION_WINDOW`` after the attempt started:
    ``needs_review`` (``unresolved_timeout``), hold kept. A later verified completion can still
    finalize it.
+6. ``reconcile_for_webhook`` (M3.3): what a verified PayPal webhook triggers. The same
+   reconciliation in any status (like the merchant command) but **never captures**
+   (``allow_retry=False``), and it raises ``PayPalUnavailable`` instead of answering
+   ``processing`` when PayPal can't be read, so the webhook stays retryable. It also reports
+   what PayPal said (its order status and the capture record used), so the caller can tell
+   whether PayPal has caught up with the event. The event body itself is never used here.
 """
 
 from __future__ import annotations
@@ -127,6 +133,15 @@ class PaymentResult:
     @property
     def recoverable(self) -> bool:
         return self.result in RECOVERABLE
+
+
+@dataclass(frozen=True)
+class WebhookReconciliation:
+    """A webhook-triggered reconciliation and what PayPal's API said (never the event body)."""
+
+    result: PaymentResult
+    paypal_order_status: str | None  # None only if PayPal wasn't asked (no PayPal order)
+    capture_status: str | None  # PayPal's own capture record that was applied; None: no capture
 
 
 class PaymentsUnavailable(AtlasError):
@@ -468,6 +483,31 @@ def reconcile_by_reference(
     return _reconcile(session, order_id, gateway, merchant_id, clock, allow_retry=True, any_status=True)
 
 
+def reconcile_for_webhook(
+    session: Session, order_id: int, *, gateway: PayPalGateway, merchant_id: str, clock: Clock
+) -> WebhookReconciliation:
+    """A verified webhook named this order: ask PayPal and apply what **PayPal** says.
+
+    Any status (a payment that arrived after the order ended is found too), never a capture, and
+    ``PayPalUnavailable`` if PayPal's order or capture record can't be read.
+    """
+    seen = _reconcile_seen(
+        session, order_id, gateway, merchant_id, clock, allow_retry=False, any_status=True, strict=True
+    )
+    return WebhookReconciliation(
+        seen.result,
+        seen.paypal_order.status if seen.paypal_order else None,
+        seen.record.status if seen.record else None,
+    )
+
+
+@dataclass(frozen=True)
+class _Seen:
+    result: PaymentResult
+    paypal_order: PayPalOrder | None = None
+    record: CaptureRecord | None = None  # the capture record finalize applied
+
+
 def _reconcile(
     session: Session,
     order_id: int,
@@ -478,18 +518,37 @@ def _reconcile(
     allow_retry: bool,
     any_status: bool = False,
 ) -> PaymentResult:
+    return _reconcile_seen(
+        session, order_id, gateway, merchant_id, clock, allow_retry=allow_retry, any_status=any_status
+    ).result
+
+
+def _reconcile_seen(
+    session: Session,
+    order_id: int,
+    gateway: PayPalGateway,
+    merchant_id: str,
+    clock: Clock,
+    *,
+    allow_retry: bool,
+    any_status: bool = False,
+    strict: bool = False,
+) -> _Seen:
+    """``strict``: raise ``PayPalUnavailable`` when PayPal can't be read, instead of ``processing``."""
     with unit_of_work(session):
         state = _state(session, order_id)
     if state.paypal_order_id is None:
-        return _result(session, order_id)
+        return _Seen(_result(session, order_id))
     if not any_status and state.status not in ("capturing", "payment_pending"):
-        return _result(session, order_id)
+        return _Seen(_result(session, order_id))
 
     try:
         paypal_order = gateway.get_order(state.paypal_order_id)
     except (PayPalUnavailable, PayPalRejected) as error:
         logger.warning("paypal reconcile unavailable", extra={"order_id": order_id, "paypal_debug_id": error.debug_id})
-        return _after(session, order_id, clock, PROCESSING)
+        if strict:
+            raise PayPalUnavailable("PayPal order unavailable", debug_id=error.debug_id) from None
+        return _Seen(_after(session, order_id, clock, PROCESSING))
     with unit_of_work(session):
         now = clock.now()
         session.execute(
@@ -499,27 +558,31 @@ def _reconcile(
             .execution_options(synchronize_session=False)
         )
 
-    result = _apply(session, order_id, paypal_order, gateway, merchant_id, clock, source="reconcile")
+    result, record = _apply_seen(
+        session, order_id, paypal_order, gateway, merchant_id, clock, source="reconcile", strict=strict
+    )
     if result is not None:
-        return _after(session, order_id, clock, result)
+        return _Seen(_after(session, order_id, clock, result), paypal_order, record)
 
     # No capture exists at PayPal.
     if paypal_order.status == "VOIDED":
-        return _after(session, order_id, clock, _definitive_no_payment(session, order_id, clock))
+        return _Seen(_after(session, order_id, clock, _definitive_no_payment(session, order_id, clock)), paypal_order)
     if state.status == "capturing" and state.capture_request_id is not None:
         if paypal_order.status == "APPROVED":
             started = state.capture_started_at or clock.now()
             if allow_retry and clock.now() - started >= STALE_CAPTURE_AFTER:
                 # The claimed attempt is stale (e.g. the process died mid-request): retry the SAME
                 # logical request with the SAME PayPal-Request-Id, so PayPal can't capture twice.
-                return _run_capture(
-                    session, order_id, state.paypal_order_id, state.capture_request_id, gateway, merchant_id, clock
+                return _Seen(
+                    _run_capture(
+                        session, order_id, state.paypal_order_id, state.capture_request_id, gateway, merchant_id, clock
+                    )
                 )
-            return _after(session, order_id, clock, PROCESSING)
+            return _Seen(_after(session, order_id, clock, PROCESSING), paypal_order)
         if paypal_order.status in ("CREATED", "SAVED", "PAYER_ACTION_REQUIRED"):
             _release_claim(session, order_id, state.capture_request_id, clock)  # not approved: no capture possible
-            return _result(session, order_id, PAYER_ACTION_REQUIRED)
-    return _after(session, order_id, clock, None)
+            return _Seen(_result(session, order_id, PAYER_ACTION_REQUIRED), paypal_order)
+    return _Seen(_after(session, order_id, clock, None), paypal_order)
 
 
 def _apply(
@@ -533,18 +596,35 @@ def _apply(
     source: str,
 ) -> str | None:
     """Finalize from PayPal's capture record(s) for this PayPal order; None if there is no capture."""
+    return _apply_seen(session, order_id, paypal_order, gateway, merchant_id, clock, source=source)[0]
+
+
+def _apply_seen(
+    session: Session,
+    order_id: int,
+    paypal_order: PayPalOrder,
+    gateway: PayPalGateway,
+    merchant_id: str,
+    clock: Clock,
+    *,
+    source: str,
+    strict: bool = False,
+) -> tuple[str | None, CaptureRecord | None]:
+    """``_apply`` plus the capture record it finalized from. ``strict``: raise when unreadable."""
     if not paypal_order.captures:
-        return None
+        return None, None
     try:
         records = [gateway.get_capture(capture.id) for capture in paypal_order.captures]
     except (PayPalUnavailable, PayPalRejected) as error:
         logger.warning(
             "paypal capture record unavailable", extra={"order_id": order_id, "paypal_debug_id": error.debug_id}
         )
-        return PROCESSING
+        if strict:
+            raise PayPalUnavailable("PayPal capture record unavailable", debug_id=error.debug_id) from None
+        return PROCESSING, None
     rank = {"COMPLETED": 0, "PENDING": 1}
     best = min(records, key=lambda record: rank.get(record.status, 2))  # one success outranks any decline
-    return finalize(session, order_id, best, merchant_id=merchant_id, clock=clock, source=source)
+    return finalize(session, order_id, best, merchant_id=merchant_id, clock=clock, source=source), best
 
 
 def _after(session: Session, order_id: int, clock: Clock, result: str | None) -> PaymentResult:

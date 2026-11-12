@@ -25,6 +25,8 @@ GEMINI_MODEL_PATTERN = re.compile(r"^gemini-[a-z0-9][a-z0-9.-]{0,62}$")
 DEFAULT_LLM_MODEL = "gemini-3.8-flash"
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"  # strict structured outputs
 GROQ_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,80}$")
+# PayPal's documented webhook id schema (Webhooks v1): alphanumeric, at most 50 characters.
+PAYPAL_WEBHOOK_ID_PATTERN = re.compile(r"[A-Za-z0-9]{1,50}")
 
 
 class Environment(StrEnum):
@@ -87,6 +89,10 @@ class Settings(BaseSettings):
     # The fallback model when Gemini is unavailable: enabled whenever GROQ_API_KEY is set.
     groq_api_key: SecretStr = SecretStr("")  # never logged or shown
     groq_model: str = DEFAULT_GROQ_MODEL
+    # M3.3: the id of the Sandbox app's webhook, which PayPal's signature verification API needs.
+    # Without it (or without payments) the webhook endpoint fails closed; capture and
+    # reconciliation (M3.2) keep working.
+    paypal_webhook_id: str = ""
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -184,6 +190,19 @@ class Settings(BaseSettings):
     @property
     def resolved_llm_model(self) -> str:
         return self.llm_model.strip() or DEFAULT_LLM_MODEL
+
+    @property
+    def paypal_webhook_problem(self) -> str | None:
+        """Why PayPal webhooks can't be verified (and are refused), or None. Never echoes a value."""
+        if self.paypal_problem is not None:
+            return self.paypal_problem
+        if not PAYPAL_WEBHOOK_ID_PATTERN.fullmatch(self.paypal_webhook_id.strip()):
+            return "PAYPAL_WEBHOOK_ID must be the Sandbox webhook's id (alphanumeric, at most 50 characters)"
+        return None
+
+    @property
+    def webhooks_enabled(self) -> bool:
+        return self.paypal_webhook_problem is None
 
     @property
     def order_hold(self) -> timedelta:

@@ -30,7 +30,8 @@ REQUIRE_POSTGRES_TESTS = os.environ.get("REQUIRE_POSTGRES_TESTS", "").strip() ==
 # At least this many postgres-marked tests must pass, so deleting or unmarking one can't
 # quietly weaken the guard. Raise it whenever concurrency tests are added.
 # 3 (M1, M2.2 primitives) + 12 (reservation concurrency) + 5 (order concurrency) + 4 (payment concurrency)
-MIN_POSTGRES_TESTS = 24
+# + 3 (webhook concurrency, M3.3)
+MIN_POSTGRES_TESTS = 27
 _postgres_outcomes: dict[str, str] = {}
 
 

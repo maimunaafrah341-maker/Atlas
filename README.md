@@ -4,16 +4,16 @@ Multilingual AI commerce copilot for global small businesses: conversational pro
 
 **Live demo:** https://atlas-uema.onrender.com/ (Render free plan: the first request after a quiet period can take up to a minute while the service wakes up). Screenshots: [Demo](#demo).
 
-**Status: M3.2 (PayPal Sandbox payments) + M5 MVP (Gemini product discovery).** On top of the M0 foundation, this build has:
+**Status: M3.3 (PayPal Sandbox payments and webhooks) + M5 MVP (AI product discovery).** On top of the M0 foundation, this build has:
 - **Catalogue (M1):** the demo catalogue (20 products, 60 variants, 5 languages), deterministic search, a product detail API, audited inventory with a never-negative available-stock invariant, and shipping-rate lookup.
 - **Cart (M2):** a cookie-identified cart API with time-limited stock reservations ([ADR-024](docs/DECISIONS.md)), and the frontend shopping bag.
 - **Orders (M3.1):** an immutable, hashed order snapshot that adopts the cart's reservation as its stock hold ([ADR-025](docs/DECISIONS.md)).
 - **PayPal Sandbox payments (M3.2):** the backend creates the PayPal order, captures it on the server, verifies the capture against PayPal's own record, reconciles unknown outcomes, and finalizes each payment once ([ADR-026](docs/DECISIONS.md)). It is verified with a real Sandbox purchase (see [Demo](#demo)). Sandbox only, USD only.
+- **PayPal webhooks (M3.3):** signature-verified `PAYMENT.CAPTURE.*` notifications that trigger reconciliation with PayPal (see [PayPal webhooks](#paypal-webhooks-m33)).
 - **Natural-language discovery (M5 MVP):** describe what you need on the Shop page; Google Gemini turns it into validated catalogue filters and the ordinary catalogue search returns the products (see [Gemini product discovery](#gemini-product-discovery-m5-mvp)).
 
 **Not implemented yet:**
 - the frontend checkout step (the PayPal JavaScript buttons, M3.4); today a payment is driven through the API;
-- PayPal webhooks (M3.3);
 - Make.com automation;
 - the conversational assistant, AI-written answers and retrieval (RAG): only discovery uses AI so far.
 
@@ -156,7 +156,27 @@ Without these settings the backend logs `gemini discovery disabled` and discover
 - An unknown outcome is reconciled with PayPal, never guessed.
 - Configuration (`PAYPAL_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_MERCHANT_ID`) is documented in [.env.example](.env.example). Without it, the payment endpoints answer 503 and the rest of the shop keeps working.
 - Sandbox only, with test accounts and no real money.
-- The PayPal JavaScript buttons (M3.4) aren't built yet, so a payment is driven through the API. PayPal webhooks (M3.3) are in progress on a separate branch.
+- The PayPal JavaScript buttons (M3.4) aren't built yet, so a payment is driven through the API. Webhooks are described below.
+
+## PayPal webhooks (M3.3)
+
+`POST /api/webhooks/paypal` receives PayPal Sandbox webhook events. A webhook is a **notification, never evidence**: payment state always comes from PayPal's API ([ADR-027](docs/DECISIONS.md)).
+
+- **Events acted on:** `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.PENDING` and `PAYMENT.CAPTURE.DENIED`. Other events, including `CHECKOUT.ORDER.APPROVED`, are acknowledged and recorded as `ignored`. A webhook never captures.
+- **Verification:** every delivery goes to PayPal's `verify-webhook-signature` API, with the raw body bytes unchanged and the configured `PAYPAL_WEBHOOK_ID`. Only a `FAILURE` answer rejects it (400). An unreachable or failing verification request is retryable (503).
+- **Processing:** each event ID is recorded once, with a delivery count; duplicates are acknowledged without asking PayPal again. The event's order is matched strictly by its PayPal order ID, or by the Atlas reference only when no PayPal order ID is present. Conflicting identifiers give `unmatched`. Atlas then reads the order and capture **from PayPal** and applies the result through the same `finalize` as the capture flow. The event body's amount and status are never used.
+- **Retries:**
+  - **503** when PayPal is unavailable, or its state hasn't caught up with the event (for example a COMPLETED event while the capture still reads PENDING). The event stays unprocessed and PayPal redelivers it.
+  - **200** for processed, duplicate, ignored and unmatched events.
+  - **400** for malformed deliveries and rejected signatures.
+  - **413** for bodies over 64 KB.
+- **Safety:**
+  - No cart cookie and no Origin check, because PayPal's servers have neither; the signature check authenticates instead.
+  - Responses are `no-store` and never set a cookie.
+  - The body, transmission headers and payer data are never stored or logged.
+  - A missing, duplicated, late or contradictory event never releases stock.
+- **Limitations:** refunds and reversals (`PAYMENT.CAPTURE.REFUNDED` / `REVERSED`) are **not processed**. They are recorded as `ignored` and logged for a person: future work.
+- **Setup:** register the webhook on the same Sandbox app as `PAYPAL_CLIENT_ID`, subscribed to the three events, pointing at `https://<host>/api/webhooks/paypal`. Set `PAYPAL_WEBHOOK_ID` (see [.env.example](.env.example)). For a local test, a temporary HTTPS tunnel (e.g. a Cloudflare Quick Tunnel) can expose the dev backend.
 
 ## Seeding
 

@@ -128,6 +128,32 @@ Invariant: `stock_reserved = SUM(items of active + order_hold reservations)`. Lo
 
 **Rejected:** trusting the capture response alone (the capture object's fields aren't guaranteed to carry the merchant or reference); treating timeouts as failures; retrying a capture with a new request id after an ambiguous result; reconciling as a side effect of `GET`; storing raw PayPal responses; a configurable API base URL. Webhook verification and event persistence are M3.3 (migration `0006`).
 
+### ADR-027 PayPal webhooks: verified notifications that trigger reconciliation, never evidence (new, M3.3)
+`POST /api/webhooks/paypal` acts on `PAYMENT.CAPTURE.COMPLETED`, `PENDING` and `DENIED` only.
+
+- **Verification:** each delivery is verified with PayPal's `/v1/notifications/verify-webhook-signature`. The request carries the raw body bytes spliced in unchanged and `PAYPAL_WEBHOOK_ID`, which is alphanumeric and at most 50 characters. Only an HTTP 200 with `verification_status: FAILURE` rejects a delivery. Any other non-2xx, a token failure, a timeout or an unknown status is "unavailable", which is retryable.
+- **Recording:** a verified event is recorded once in `paypal_webhook_events`, keyed by event ID (at most 64 characters; longer IDs are refused, never truncated). An atomic upsert counts deliveries.
+- **Matching:**
+  1. A PayPal order ID that is present decides the match.
+  2. An unknown or malformed PayPal order ID gives `unmatched`, with no fallback.
+  3. The Atlas reference (`invoice_id`, else `custom_id`) is used only when no PayPal order ID is present.
+  4. Identifiers naming two different orders give `unmatched`, and neither order is touched.
+- **Reconciliation:** the matched order's **stored** PayPal order ID is reconciled by `GET` order and capture, through `finalize` (ADR-026), without ever capturing.
+- **When an event counts as processed:** `processed_at` is set only when PayPal's state has caught up. A PENDING event settles once any capture record exists. COMPLETED and DENIED events settle once the capture is no longer PENDING. A VOIDED order always settles. Otherwise the route answers 503 and PayPal redelivers.
+- **Stock:** only a capture record that is DECLINED/FAILED, or a VOIDED order, releases stock. Never a missing, duplicated, unmatched, late or contradictory event.
+- **HTTP:** PayPal has no cookie or Origin, so the route has neither the cart dependency nor the same-origin check. Bodies over 64 KB get 413. Missing or repeated transmission headers get 400. Responses are `no-store` with no cookie.
+
+**Why:** PayPal recommends webhooks for asynchronous outcomes (pending captures, lost capture responses). Treating them as triggers keeps one source of truth, PayPal's API, and one finalization path.
+
+**Rejected:**
+- trusting the event body;
+- `CHECKOUT.ORDER.APPROVED` with auto-capture (the capture belongs to the buyer's flow);
+- a freshness cutoff (late events are valid);
+- answering 200 while PayPal lags (the event would be lost);
+- storing raw payloads.
+
+**Future work:** refunds and reversals are recorded as `ignored`, never treated as payments.
+
 ### ADR-028 Natural-language discovery: the model proposes filters, the catalogue answers (new, M5 MVP)
 `POST /api/discovery` takes a shopper's request in their own words (up to 300 characters) and returns ordinary catalogue results. Gemini (`gemini-3.8-flash`) produces a `ShoppingIntent` under a JSON response schema made of the catalogue's closed vocabularies: categories, sizes, colours and tags, plus at most four keywords. The backend then:
 - validates the reply strictly: exactly those five fields, known codes only, list limits. Any other field (a product, price, stock, shipping, payment) rejects the reply. A keyword survives only if the shopper wrote it, so the model cannot add search text;
@@ -148,8 +174,6 @@ Invariant: `stock_reserved = SUM(items of active + order_hold reservations)`. Lo
 - a conversational assistant or generated answers (not needed for discovery, and much harder to validate);
 - letting the model pick product IDs (they can't be checked against intent);
 - retrieval/RAG for this step (the catalogue is small and fully structured).
-
-*ADR-027 is reserved for the M3.3 PayPal webhook design, which is on its own branch.*
 
 *Update (M5, 2026-11-12):* Groq is now the fallback model. During the live test, Gemini 3.8 Flash answered 503 "high demand" and then timed out. Groq, model `openai/gpt-oss-20b` in strict JSON-schema mode, answered the same requests correctly in about 0.5 s.
 - **Order:** Gemini, then Groq, then the keyword parser. Groq is enabled whenever `GROQ_API_KEY` is set.

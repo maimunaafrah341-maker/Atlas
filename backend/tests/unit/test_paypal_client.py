@@ -20,8 +20,10 @@ from app.domain.payments.paypal import (
     PayPalRejected,
     PayPalUnavailable,
     SandboxPayPalClient,
+    WebhookTransmission,
     from_paypal_value,
     to_paypal_value,
+    webhook_verification_body,
 )
 from app.domain.payments.verify import Expected, capture_problem, order_request
 
@@ -256,3 +258,118 @@ def test_the_order_request_is_the_snapshot() -> None:
     for bad in ("", "shop.example", "https://shop.example/", "https://shop.example/x", "javascript:alert(1)"):
         with pytest.raises(ValueError, match="origin"):
             order_request(order, merchant_id="ABCDEFGH23456", site_origin=bad)
+
+
+# --- M3.3: webhook signature verification ------------------------------------------------------
+
+TRANSMISSION = WebhookTransmission(
+    auth_algo="SHA256withRSA",
+    cert_url="https://api-m.sandbox.paypal.com/v1/notifications/certs/CERT-360caa42-fca2a594-1d93a270",
+    transmission_id="69cd13f0-d67a-11e5-baa3-778b53f4ae55",
+    transmission_sig="lmI95Jx3Y9nhR5SJWlHVIWpg4AgFk7n9bCHSRxbrd8A9zrhdu2rMyFrmz+Zjh3s3boXB07VXCXUZy/UFzUlnGJn0wDugt7FlSvdKeIJenLRemUxYCPVoEZzg9VFNqOa48gMkvF+XTpxBeUx/kWy6B5cp7GkT2+pOowfRK7OaynuxUoKW3JcMWw272VKjLTtTAShncla7tGF+55rxyt2KNZIIqxNMJ48RDZheGU5w1npu9dZHnPgTXB9iomeVRoD8O/jhRpnKsGrDschyNdkeh81BJJMH4Ctc6lnCCquoP/GzCzz33MMsNdid7vL/NIWaCsekQpW26FpWPi/tfj8nLA==",
+    transmission_time="2026-11-12T10:42:13Z",
+)
+WEBHOOK_ID = "8PT597110X687430LKGECATA"
+# Spacing, key order, a float with a trailing zero and escapes that json.dumps would change.
+RAW_EVENT = (
+    b'{ "id":"WH-58D329510W468432D-8HN650336L201105X" ,"create_time":"2026-11-12T10:42:13.000Z",'
+    b'"event_type":"PAYMENT.CAPTURE.COMPLETED","resource_version":"2.0",'
+    b'"summary":"Payment completed for $ 149.0 USD \\u00e9\\/","amount":1.10,'
+    b'"resource":{"id":"CAP123","status":"COMPLETED"}}\n'
+)
+
+
+def test_webhook_verification_sends_the_received_event_bytes_unchanged() -> None:
+    recorder = Recorder(httpx.Response(200, json={"verification_status": "SUCCESS"}))
+    verified = client(recorder).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT)
+
+    assert verified is True
+    _token, verify = recorder.requests
+    assert str(verify.url) == f"{SANDBOX_API_BASE}/v1/notifications/verify-webhook-signature"
+    assert verify.method == "POST"
+    assert verify.headers["authorization"] == "Bearer access-token-value"
+    assert verify.headers["content-type"] == "application/json"
+    assert "paypal-request-id" not in verify.headers
+    assert verify.content.endswith(b',"webhook_event":' + RAW_EVENT + b"}")  # byte for byte
+    body = json.loads(verify.content)
+    assert body == {
+        "auth_algo": TRANSMISSION.auth_algo,
+        "cert_url": TRANSMISSION.cert_url,
+        "transmission_id": TRANSMISSION.transmission_id,
+        "transmission_sig": TRANSMISSION.transmission_sig,
+        "transmission_time": TRANSMISSION.transmission_time,
+        "webhook_id": WEBHOOK_ID,
+        "webhook_event": json.loads(RAW_EVENT),
+    }
+
+
+def test_only_http_200_with_failure_rejects_the_signature() -> None:
+    recorder = Recorder(httpx.Response(200, json={"verification_status": "FAILURE"}))
+    assert client(recorder).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT) is False
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        # The verification request itself failed (our request, credentials or configuration):
+        # that says nothing about the webhook's signature, so the delivery must stay retryable.
+        httpx.Response(400, json={"name": "VALIDATION_ERROR", "details": [{"issue": "INVALID_WEBHOOK_ID"}]}),
+        httpx.Response(401, json={"name": "AUTHENTICATION_FAILURE"}),  # twice: after the token refresh too
+        httpx.Response(403, json={"name": "NOT_AUTHORIZED"}),
+        httpx.Response(404, json={"name": "RESOURCE_NOT_FOUND"}),
+        httpx.Response(422, json={"name": "UNPROCESSABLE_ENTITY"}),
+        httpx.Response(500, json={"name": "INTERNAL_SERVER_ERROR"}),
+        httpx.Response(503, text="unavailable"),
+        httpx.ReadTimeout("timed out"),
+        httpx.ConnectError("refused"),
+        httpx.Response(200, text="not json"),
+        httpx.Response(200, json={"verification_status": "success"}),  # not PayPal's value
+        httpx.Response(200, json={"verification_status": None}),
+        httpx.Response(200, json={"something": "else"}),
+    ],
+)
+def test_every_other_verification_outcome_is_unavailable(failure: httpx.Response | Exception) -> None:
+    responses = [failure, failure] if isinstance(failure, httpx.Response) and failure.status_code == 401 else [failure]
+    with pytest.raises(PayPalUnavailable):
+        client(Recorder(*responses)).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT)
+
+
+def test_a_refused_token_request_is_unavailable_not_a_bad_signature() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "invalid_client"})  # e.g. wrong client credentials
+
+    with pytest.raises(PayPalUnavailable):
+        client(handler).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"",
+        b"[]",
+        b"1",
+        b'"text"',
+        b"{",
+        b'{"a":1} {"b":2}',
+        b'{"a":1},"webhook_id":"OTHER"',
+        b'{"a":NaN}',
+        b'{"a":Infinity}',
+        b'\xef\xbb\xbf{"a":1}',  # UTF-8 byte order mark
+        b'{"a":"\xff"}',  # not UTF-8
+        '{"a":1}'.encode("utf-16"),
+    ],
+)
+def test_a_body_that_is_not_one_json_object_is_never_sent(raw: bytes) -> None:
+    recorder = Recorder()
+    with pytest.raises(ValueError, match="not a JSON object"):
+        client(recorder).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=raw)
+    assert recorder.requests == []  # not even a token request
+
+
+def test_header_values_cannot_add_or_replace_fields() -> None:
+    hostile = replace(TRANSMISSION, transmission_sig='x","webhook_id":"OTHER', auth_algo='"}\n{')
+    body = json.loads(webhook_verification_body(hostile, webhook_id=WEBHOOK_ID, raw_event=b'{"id":"WH-1"}'))
+    assert body["webhook_id"] == WEBHOOK_ID
+    assert body["transmission_sig"] == 'x","webhook_id":"OTHER'
+    assert body["auth_algo"] == '"}\n{'
+    assert body["webhook_event"] == {"id": "WH-1"}
