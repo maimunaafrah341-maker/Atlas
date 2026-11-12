@@ -106,6 +106,7 @@ class Checkout:
             self.version_hash,
             gateway=self.paypal,
             merchant_id=MERCHANT,
+            site_origin="http://testserver",
             clock=self.clock,
         )
         self.paypal_order_id = started.paypal_order_id

@@ -17,6 +17,7 @@ Request bodies for creating the PayPal order are built here too, from the immuta
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +28,11 @@ from app.domain.payments.paypal import CaptureRecord, from_paypal_value, to_payp
 ORDER_CURRENCY = "USD"
 BRAND_NAME = "Atlas Demo Outfitters"
 MAX_ITEM_NAME = 127
+# Where PayPal sends the buyer after approving or cancelling on its own page. Required for the
+# payer-action (redirect) approval that payment_source.paypal produces; the site's own bag page.
+RETURN_PATH = "/bag?paypal=approved"
+CANCEL_PATH = "/bag?paypal=cancelled"
+_SITE_ORIGIN = re.compile(r"^https?://[^/?#@\s]+$")
 
 
 @dataclass(frozen=True)
@@ -53,8 +59,14 @@ def capture_problem(record: CaptureRecord, expected: Expected) -> str | None:
     return None
 
 
-def order_request(order: OrderView, *, merchant_id: str) -> Mapping[str, Any]:
-    """The Orders v2 create body: one purchase unit whose items and breakdown are the snapshot."""
+def order_request(order: OrderView, *, merchant_id: str, site_origin: str) -> Mapping[str, Any]:
+    """The Orders v2 create body: one purchase unit whose items and breakdown are the snapshot.
+
+    ``site_origin`` is the site's own trusted origin (scheme and host, no path), from which the
+    return and cancel URLs are built; never anything the browser supplied.
+    """
+    if not _SITE_ORIGIN.match(site_origin):
+        raise ValueError("site_origin must be a bare http(s) origin")
     if order.currency != ORDER_CURRENCY:
         raise ValueError("orders are in USD")
     items_total = sum(line.line_total_minor for line in order.lines)
@@ -94,6 +106,8 @@ def order_request(order: OrderView, *, merchant_id: str) -> Mapping[str, Any]:
                     "brand_name": BRAND_NAME,
                     "shipping_preference": "NO_SHIPPING",
                     "user_action": "PAY_NOW",
+                    "return_url": site_origin + RETURN_PATH,
+                    "cancel_url": site_origin + CANCEL_PATH,
                 }
             }
         },

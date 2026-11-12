@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.api.cart import ClockDep, _current_cart
 from app.api.deps import SessionDep
-from app.api.security import SameOrigin, SettingsDep
+from app.api.security import CrossOriginRequest, SameOrigin, SettingsDep, expected_origin
 from app.db import unit_of_work
 from app.domain.catalog.schemas import Money
 from app.domain.catalog.service import product_names
@@ -266,6 +266,9 @@ def post_paypal_order(
     lang: Language = DEFAULT_LANGUAGE,
 ) -> StartPaymentOut:
     """Approve the reviewed order (its version hash) and create its one PayPal order. Repeatable."""
+    site = expected_origin(request, settings)  # the trusted origin SameOrigin already checked
+    if site is None:
+        raise CrossOriginRequest()
     started = start_paypal_checkout(
         session,
         _owner(session, request, clock),
@@ -273,6 +276,7 @@ def post_paypal_order(
         body.version_hash,
         gateway=paypal,
         merchant_id=settings.paypal_merchant_id.strip(),
+        site_origin=site,
         clock=clock,
     )
     return StartPaymentOut(paypal_order_id=started.paypal_order_id, order=_read_names(session, started.order, lang))

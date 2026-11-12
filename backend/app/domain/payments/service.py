@@ -263,6 +263,7 @@ def start_paypal_checkout(
     *,
     gateway: PayPalGateway,
     merchant_id: str,
+    site_origin: str,
     clock: Clock,
 ) -> CheckoutStart:
     """Approve the reviewed snapshot and create its one PayPal order. Safe to repeat."""
@@ -301,7 +302,9 @@ def start_paypal_checkout(
         request_id = state.create_request_id
 
     try:
-        created = gateway.create_order(order_request(view, merchant_id=merchant_id), request_id=request_id)
+        created = gateway.create_order(
+            order_request(view, merchant_id=merchant_id, site_origin=site_origin), request_id=request_id
+        )
     except PayPalUnavailable as error:
         logger.warning("paypal create unavailable", extra={"order_ref": public_ref, "paypal_debug_id": error.debug_id})
         raise PaymentProviderUnavailable() from None

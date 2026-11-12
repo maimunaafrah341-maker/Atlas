@@ -111,6 +111,12 @@ def test_sandbox_checkout_end_to_end(api: TestClient, paypal: fake.FakePayPal, d
     assert started.status_code == 200, started.text
     paypal_order_id = started.json()["paypal_order_id"]
     assert started.json()["order"]["status"] == "awaiting_payment"
+    context = paypal.orders[paypal_order_id].body["payment_source"]["paypal"]["experience_context"]
+    # Built from the site's own origin (scheme + Host), where PayPal returns the buyer.
+    assert (context["return_url"], context["cancel_url"]) == (
+        f"{ORIGIN}/bag?paypal=approved",
+        f"{ORIGIN}/bag?paypal=cancelled",
+    )
     paypal.approve(paypal_order_id)  # the buyer, in PayPal's window
 
     paid = capture(api, order, paypal_order_id)

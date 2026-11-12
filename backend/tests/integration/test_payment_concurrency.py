@@ -74,7 +74,14 @@ def approved_order(factory: sessionmaker[Session], clock: FixedClock, paypal: fa
         reserve_cart(session, cart_id, clock=clock, ttl=TTL)
         order = create_order(session, cart_id, ship_country="FR", lang="en", clock=clock, hold=HOLD).order
         started = start_paypal_checkout(
-            session, cart_id, order.public_ref, order.version_hash, gateway=paypal, merchant_id=MERCHANT, clock=clock
+            session,
+            cart_id,
+            order.public_ref,
+            order.version_hash,
+            gateway=paypal,
+            merchant_id=MERCHANT,
+            site_origin="http://testserver",
+            clock=clock,
         )
     paypal.approve(started.paypal_order_id)
     return cart_id, order.public_ref, started.paypal_order_id

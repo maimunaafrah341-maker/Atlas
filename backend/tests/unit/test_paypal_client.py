@@ -229,7 +229,7 @@ def test_the_order_request_is_the_snapshot() -> None:
             OrderLineView("SOCK-M", "trail-sock", "Trail Sock", "M", "grey", 1600, 2, 3200),
         ),
     )
-    body = order_request(order, merchant_id="ABCDEFGH23456")
+    body = order_request(order, merchant_id="ABCDEFGH23456", site_origin="https://shop.example")
     unit = body["purchase_units"][0]
     assert body["intent"] == "CAPTURE"
     assert (unit["reference_id"], unit["custom_id"], unit["invoice_id"]) == ("a" * 32,) * 3
@@ -246,6 +246,13 @@ def test_the_order_request_is_the_snapshot() -> None:
         ("SHELL-M", "1", "129.00"),
         ("SOCK-M", "2", "16.00"),
     ]
-    assert body["payment_source"]["paypal"]["experience_context"]["shipping_preference"] == "NO_SHIPPING"
+    context = body["payment_source"]["paypal"]["experience_context"]
+    assert context["shipping_preference"] == "NO_SHIPPING"
+    # The redirect (payer-action) approval needs both; PayPal's hosted page fails without them.
+    assert context["return_url"] == "https://shop.example/bag?paypal=approved"
+    assert context["cancel_url"] == "https://shop.example/bag?paypal=cancelled"
     with pytest.raises(ValueError, match="add up"):
-        order_request(replace(order, total_minor=1), merchant_id="ABCDEFGH23456")
+        order_request(replace(order, total_minor=1), merchant_id="ABCDEFGH23456", site_origin="https://shop.example")
+    for bad in ("", "shop.example", "https://shop.example/", "https://shop.example/x", "javascript:alert(1)"):
+        with pytest.raises(ValueError, match="origin"):
+            order_request(order, merchant_id="ABCDEFGH23456", site_origin=bad)
