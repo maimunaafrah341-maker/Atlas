@@ -4,17 +4,18 @@ Multilingual AI commerce copilot for global small businesses: conversational pro
 
 **Live demo:** https://atlas-uema.onrender.com/ (Render free plan: the first request after a quiet period can take up to a minute while the service wakes up). Screenshots: [Demo](#demo).
 
-**Status: M3.2 (PayPal Sandbox payments).** On top of the M0 foundation, this build has:
+**Status: M3.2 (PayPal Sandbox payments) + M5 MVP (Gemini product discovery).** On top of the M0 foundation, this build has:
 - **Catalogue (M1):** the demo catalogue (20 products, 60 variants, 5 languages), deterministic search, a product detail API, audited inventory with a never-negative available-stock invariant, and shipping-rate lookup.
 - **Cart (M2):** a cookie-identified cart API with time-limited stock reservations ([ADR-024](docs/DECISIONS.md)), and the frontend shopping bag.
 - **Orders (M3.1):** an immutable, hashed order snapshot that adopts the cart's reservation as its stock hold ([ADR-025](docs/DECISIONS.md)).
 - **PayPal Sandbox payments (M3.2):** the backend creates the PayPal order, captures it on the server, verifies the capture against PayPal's own record, reconciles unknown outcomes, and finalizes each payment once ([ADR-026](docs/DECISIONS.md)). It is verified with a real Sandbox purchase (see [Demo](#demo)). Sandbox only, USD only.
+- **Natural-language discovery (M5 MVP):** describe what you need on the Shop page; Google Gemini turns it into validated catalogue filters and the ordinary catalogue search returns the products (see [Gemini product discovery](#gemini-product-discovery-m5-mvp)).
 
 **Not implemented yet:**
 - the frontend checkout step (the PayPal JavaScript buttons, M3.4); today a payment is driven through the API;
 - PayPal webhooks (M3.3);
 - Make.com automation;
-- the AI and retrieval features.
+- the conversational assistant, AI-written answers and retrieval (RAG): only discovery uses AI so far.
 
 See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
@@ -116,6 +117,45 @@ python scripts/smoke_test.py https://<service>.onrender.com --expect-dialect pos
 - **Stock:** shown only as `in_stock`, `low_stock` or `out_of_stock`, never as a count.
 - **Errors:** every error is `{"error": {"code", "message", "details"}}`. Server errors (5xx) return a generic message and `details: [{"reference": "<id>"}]`; the real error is logged once under that reference and never sent to the client.
 - **Search limitation:** search matches whole words and word starts, with no stemming ([ADR-021](docs/DECISIONS.md)).
+
+## Gemini product discovery (M5 MVP)
+
+On the Shop page, **Describe what you need** accepts a request such as *"I'm looking for a lightweight navy jacket in medium."* (any of the five catalogue languages).
+
+1. The frontend sends it to `POST /api/discovery`, which is same-origin, read-only, sets no cookie and returns `no-store`.
+2. The backend asks **Google Gemini, model `gemini-3.8-flash`**, for a structured intent. The request uses a JSON response schema limited to the catalogue's own codes: categories, sizes, colours and tags, plus at most four keywords. Email addresses and long numbers are removed from the text first. Nothing else is sent: no cart, payer, address or payment data.
+3. The backend **validates every field** in Python.
+   - The reply must have exactly those five fields, with known codes only.
+   - Any extra field (a product, price, stock, shipping or payment value) rejects the whole reply.
+   - A keyword is kept only if the shopper actually wrote it.
+4. The validated intent becomes ordinary catalogue filters for **the same deterministic search as the Shop page** (`search_products`). Product names, prices and stock states all come from the database. The model never chooses products or prices and changes nothing. If nothing matches, the extra words, then the features, are dropped, and the response says so.
+5. **Fallback:** if Gemini isn't configured, times out (10 s), returns an error or returns invalid output (after one retry), a deterministic keyword parser builds the intent instead. Search keeps working, and the page says that keyword matching was used.
+
+The panel shows how the request was understood, the matching products as ordinary product cards, and **Apply as shop filters**, which hands over to the normal filters. Design: [ADR-028](docs/DECISIONS.md).
+
+**Local setup:** get a key from [Google AI Studio](https://aistudio.google.com/apikey), then add it to the repo-root `.env`, which git ignores. Never commit the key or put it in frontend code.
+
+```
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-3.8-flash
+GEMINI_API_KEY=<your key>
+```
+
+Without these settings the backend logs `gemini discovery disabled` and discovery uses keyword matching.
+
+**Tests and CI:** they use a fake provider and a mocked HTTP transport, and never call Google.
+
+**Hosted demo:** the deployed site uses Gemini only once `LLM_PROVIDER`, `LLM_MODEL` and `GEMINI_API_KEY` are set in the Render dashboard. Until then the hosted panel says it is using keyword matching.
+
+## PayPal Sandbox payments (M3.2)
+
+- The backend creates the PayPal order for the reviewed order total in USD, using the Sandbox REST API with server-side credentials.
+- The buyer approves on PayPal's Sandbox page.
+- The backend captures on the server and checks the capture against PayPal's own record: amount, currency, payee merchant ID and status. Only then does it finalize the order once: the stock reservation is committed and the bag emptied ([ADR-026](docs/DECISIONS.md)).
+- An unknown outcome is reconciled with PayPal, never guessed.
+- Configuration (`PAYPAL_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_MERCHANT_ID`) is documented in [.env.example](.env.example). Without it, the payment endpoints answer 503 and the rest of the shop keeps working.
+- Sandbox only, with test accounts and no real money.
+- The PayPal JavaScript buttons (M3.4) aren't built yet, so a payment is driven through the API. PayPal webhooks (M3.3) are in progress on a separate branch.
 
 ## Seeding
 

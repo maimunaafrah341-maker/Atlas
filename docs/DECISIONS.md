@@ -15,6 +15,8 @@ Every price, total and PayPal amount is in **USD**, stored as cents. The UI form
 Extract intent (validated JSON) → deterministic services → LLM composes text from structured, placeholder-protected results → validators. Prices and stock reach the UI only through structured fields. **Why:** this makes "no AI-generated prices, stock, payment state or order IDs" a structural guarantee that tests can check, instead of a prompt request. **Rejected:** a free-form agent with tool calls that mutate state (hard to bound, prompt-injection risk); letting the LLM write prices in prose (unverifiable).
 
 ### ADR-005 Provider-agnostic LLM runtime; Gemini 3.8 Flash initially (revised)
+*Update (M5, 2026-11-12):* `gemini-3.8-flash` was checked against Google's Gemini API model list and is generally available; it is the default `LLM_MODEL`. The adapter calls the REST `generateContent` endpoint through the existing `httpx` dependency instead of a vendor SDK, which keeps the vendor in one module and adds no dependency. The interface is `generate_json(system, user, schema)`; text generation is not built yet. See ADR-028.
+
 A `LLMProvider` protocol with `generate_structured(messages, schema)` and `generate_text(messages)`. The first adapter is **Gemini**, with **`gemini-3.8-flash`** as the default model. Provider and model come from env (`LLM_PROVIDER`, `LLM_MODEL`, `GEMINI_API_KEY`), so changing either needs no code change. A deterministic fake adapter serves tests and offline development. The vendor SDK is imported only inside its adapter. **Why:** a locked requirement; CI stays independent of the network and of cost; the audit found that vendor coupling in domain code was the main problem in Raahat and Athena. **Rejected:** LangChain-style frameworks (a heavy abstraction for two calls per turn); a hard-coded multi-vendor fallback chain (Athena's pattern); calling the SDK from domain code.
 
 ### ADR-006 Full-text retrieval behind one interface; semantic deferred (revised)
@@ -125,4 +127,27 @@ Invariant: `stock_reserved = SUM(items of active + order_hold reservations)`. Lo
 **Data minimisation.** `payments` keeps only verification and reconciliation fields (capture id, status and reason, amount, currency, invoice id, related order id, merchant id, source, PayPal debug id): no raw bodies, no payer names, emails, addresses or payer ids. Logs carry the order reference, PayPal issue codes and debug ids only.
 
 **Rejected:** trusting the capture response alone (the capture object's fields aren't guaranteed to carry the merchant or reference); treating timeouts as failures; retrying a capture with a new request id after an ambiguous result; reconciling as a side effect of `GET`; storing raw PayPal responses; a configurable API base URL. Webhook verification and event persistence are M3.3 (migration `0006`).
+
+### ADR-028 Natural-language discovery: the model proposes filters, the catalogue answers (new, M5 MVP)
+`POST /api/discovery` takes a shopper's request in their own words (up to 300 characters) and returns ordinary catalogue results. Gemini (`gemini-3.8-flash`) produces a `ShoppingIntent` under a JSON response schema made of the catalogue's closed vocabularies: categories, sizes, colours and tags, plus at most four keywords. The backend then:
+- validates the reply strictly: exactly those five fields, known codes only, list limits. Any other field (a product, price, stock, shipping, payment) rejects the reply. A keyword survives only if the shopper wrote it, so the model cannot add search text;
+- turns the intent into `SearchFilters` and runs `search_products`, the same code as the Shop page. Every product, price and stock state comes from the database;
+- if nothing matches, drops keywords and then tags, and says so in `relaxed`.
+
+**Fallback:** with no configuration, an invalid reply after one retry, a timeout, or an API error, a deterministic keyword parser builds the intent (`source: "keywords"`, with `fallback_reason`). Search always works.
+
+**Bounds:** a 10-second request timeout (4-second connect). One retry, only for an invalid reply or a 429, 5xx or network error.
+
+**Privacy:** the model sees only the request text, with email addresses and long numbers redacted. The text is never logged or stored. The key travels only in the `x-goog-api-key` header.
+
+**Request handling:** the endpoint is same-origin only, so other sites cannot spend the quota; it is read-only and cookie-free, and responses are `no-store`.
+
+**Why:** it gives the shopper real AI understanding (any language, synonyms, "dark blue" → navy) without letting the model decide anything the backend owns.
+
+**Rejected:**
+- a conversational assistant or generated answers (not needed for discovery, and much harder to validate);
+- letting the model pick product IDs (they can't be checked against intent);
+- retrieval/RAG for this step (the catalogue is small and fully structured).
+
+*ADR-027 is reserved for the M3.3 PayPal webhook design, which is on its own branch.*
 
