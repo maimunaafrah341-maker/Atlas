@@ -34,10 +34,10 @@ afterEach(() => {
 });
 
 describe("application shell", () => {
-  it("states plainly that this is a fictional demo with nothing for sale", () => {
+  it("states plainly that this is a fictional demo paid with PayPal Sandbox only", () => {
     renderAt("/");
-    expect(screen.getByText(/Fictional brand demonstration — browsing only, nothing can be bought yet/)).toBeVisible();
-    expect(screen.getByRole("contentinfo")).toHaveTextContent(/nothing can be purchased yet/);
+    expect(screen.getByText(/Fictional brand demonstration — PayPal Sandbox checkout, no real money/)).toBeVisible();
+    expect(screen.getByRole("contentinfo")).toHaveTextContent(/no real money is ever charged/);
   });
 
   it("links the five real catalogue categories in the header and footer", () => {

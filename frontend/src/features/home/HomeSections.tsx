@@ -101,25 +101,28 @@ export function BrandStory() {
 }
 
 /**
- * The future shopping assistant, presented only as a concept. It has no controls: nothing on
- * this page implies that an assistant exists or that AI is answering anything.
+ * Points to AI product discovery on the Shop page (M5). The AI only turns words into catalogue
+ * filters; it never writes answers, so this section describes exactly that.
  */
 export function AssistantTeaser() {
   return (
     <section aria-labelledby="assistant-heading" className={`${SECTION} py-24 sm:py-32`}>
       <div className="grid gap-10 lg:grid-cols-[1.2fr_1fr] lg:items-end">
         <div>
-          <p className="label-mono text-ink-muted">Atlas guide / Concept preview</p>
+          <p className="label-mono text-ink-muted">Atlas guide / AI product discovery</p>
           <h2 id="assistant-heading" className="mt-6 font-display text-5xl leading-[1.02] tracking-tight sm:text-6xl">
             A quieter way to find the right equipment.
           </h2>
         </div>
         <div>
-          <p className="label-mono inline-block border border-ink px-2 py-1">Concept · not available yet</p>
+          <p className="label-mono inline-block border border-ink px-2 py-1">Google Gemini · Groq fallback</p>
           <p className="mt-5 max-w-md text-base leading-relaxed text-ink-muted">
-            A guided-shopping assistant is planned for a later release. It isn’t part of this demo and nothing here is
-            powered by AI yet. When it arrives, every price and stock status it mentions will come from this catalogue.
+            Describe what you need in your own words, in any of five languages. The AI turns it into catalogue filters;
+            every product, price and stock status you see comes from this catalogue, never from the model.
           </p>
+          <div className="mt-6">
+            <ArrowLink to="/shop">Try it in the shop</ArrowLink>
+          </div>
         </div>
       </div>
     </section>

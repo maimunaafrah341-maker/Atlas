@@ -11,7 +11,7 @@ export function SiteFooter() {
           <Wordmark tone="dark" />
           <p className="mt-6 text-sm leading-relaxed text-on-dark-muted">
             A fictional outdoor apparel brand, created to demonstrate the Atlas commerce assistant. Products, prices
-            and stock come from the live demo catalogue; nothing can be purchased yet.
+            and stock come from the live demo catalogue; checkout uses PayPal Sandbox, so no real money is ever charged.
           </p>
         </div>
         <nav aria-label="Catalogue">

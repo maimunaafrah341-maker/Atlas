@@ -106,14 +106,14 @@ describe("homepage", () => {
     expect(await screen.findByText("The catalogue is empty right now.")).toBeVisible();
   });
 
-  it("presents the assistant only as a non-functional concept", () => {
+  it("points to AI discovery in the shop without claiming the AI writes answers", () => {
     vi.stubGlobal("fetch", withCart(vi.fn(async () => jsonResponse(page([])))));
     renderHome();
     const teaser = screen.getByRole("heading", { name: "A quieter way to find the right equipment." }).closest("section") as HTMLElement;
-    expect(teaser).toHaveTextContent("Concept · not available yet");
-    expect(teaser).toHaveTextContent("nothing here is powered by AI yet");
+    expect(teaser).toHaveTextContent("Google Gemini · Groq fallback");
+    expect(teaser).toHaveTextContent("comes from this catalogue, never from the model");
     expect(within(teaser).queryByRole("button")).not.toBeInTheDocument();
-    expect(within(teaser).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(teaser).getByRole("link", { name: /Try it in the shop/ })).toHaveAttribute("href", "/shop");
     expect(within(teaser).queryByRole("textbox")).not.toBeInTheDocument();
   });
 

@@ -349,6 +349,8 @@ export interface Cart {
   /** When the cart itself lapses (30 days after its last change); null for an empty, cookie-less cart. */
   expires_at: string | null;
   reservation: CartReservation | null;
+  /** The bag’s open order while checking out (M3.1); the bag can’t change meanwhile. */
+  checkout?: { order_ref: string; status: string } | null;
 }
 
 function isCartLine(value: unknown): value is CartLine {
@@ -389,7 +391,8 @@ export function isCart(value: unknown): value is Cart {
     Number.isInteger(value.item_count) &&
     isMoney(value.subtotal) &&
     (value.expires_at === null || typeof value.expires_at === "string") &&
-    (value.reservation === null || isReservation(value.reservation))
+    (value.reservation === null || isReservation(value.reservation)) &&
+    (value.checkout === undefined || value.checkout === null || (isRecord(value.checkout) && typeof value.checkout.order_ref === "string" && typeof value.checkout.status === "string"))
   );
 }
 
@@ -501,3 +504,115 @@ export async function discoverProducts(
   if (!isDiscovery(raw.body)) throw new ApiError("Unexpected discovery response from the server.", raw.status);
   return raw.body;
 }
+
+// --- Checkout and PayPal Sandbox payment (backend app/api/checkout.py, M3.1-M3.2) ---------------
+
+export interface OrderLine {
+  sku: string;
+  product_slug: string;
+  name: string;
+  size: string;
+  colour: string;
+  quantity: number;
+  unit_price: Money;
+  line_total: Money;
+}
+
+/** An immutable order snapshot. Every amount is the server's; nothing is totalled here. */
+export interface Order {
+  ref: string;
+  status: string;
+  version_hash: string;
+  lines: OrderLine[];
+  item_count: number;
+  subtotal: Money;
+  shipping: { country: string; zone: string; price: Money };
+  total: Money;
+  hold_expires_at: string;
+  created_at: string;
+}
+
+export interface CheckoutConfig {
+  payments_enabled: boolean;
+  /** PayPal's public client id (not a secret); only when payments are enabled. */
+  paypal_client_id: string | null;
+  currency: string;
+  intent: string;
+}
+
+/** paid | pending | processing | instrument_declined | payer_action_required | failed | needs_review | awaiting_payment | closed */
+export interface PaymentResult {
+  result: string;
+  /** The buyer can try again in PayPal; the stock hold is kept. */
+  recoverable: boolean;
+  order: Order;
+}
+
+function isOrder(value: unknown): value is Order {
+  return (
+    isRecord(value) &&
+    typeof value.ref === "string" &&
+    typeof value.status === "string" &&
+    typeof value.version_hash === "string" &&
+    Array.isArray(value.lines) &&
+    value.lines.every((line) => isRecord(line) && typeof line.sku === "string" && isMoney(line.line_total) && Number.isInteger(line.quantity)) &&
+    isMoney(value.subtotal) &&
+    isRecord(value.shipping) &&
+    typeof value.shipping.country === "string" &&
+    isMoney(value.shipping.price) &&
+    isMoney(value.total) &&
+    typeof value.hold_expires_at === "string"
+  );
+}
+
+async function orderRequest<T>(path: string, lang: Language, check: (value: unknown) => value is T, options: RequestOptions = {}): Promise<T> {
+  const raw = await requestJson(`/api/cart/orders${path}?${new URLSearchParams({ lang })}`, undefined, DEFAULT_TIMEOUT_MS, options);
+  if (!raw.ok) throw errorFrom(raw);
+  if (!check(raw.body)) throw new ApiError("Unexpected checkout response from the server.", raw.status);
+  return raw.body;
+}
+
+const isPayment = (value: unknown): value is PaymentResult =>
+  isRecord(value) && typeof value.result === "string" && typeof value.recoverable === "boolean" && isOrder(value.order);
+
+/** GET /api/checkout/config: whether PayPal Sandbox payments are available here. */
+export async function getCheckoutConfig(signal?: AbortSignal): Promise<CheckoutConfig> {
+  const raw = await requestJson("/api/checkout/config", signal, DEFAULT_TIMEOUT_MS);
+  const body = raw.body;
+  if (!raw.ok || !isRecord(body) || typeof body.payments_enabled !== "boolean") throw errorFrom(raw);
+  return {
+    payments_enabled: body.payments_enabled,
+    paypal_client_id: typeof body.paypal_client_id === "string" ? body.paypal_client_id : null,
+    currency: typeof body.currency === "string" ? body.currency : "USD",
+    intent: typeof body.intent === "string" ? body.intent : "capture",
+  };
+}
+
+/** POST /api/cart/orders: snapshot the reserved bag as an order shipping to `country`. */
+export const createOrder = (country: string, lang: Language) =>
+  orderRequest("", lang, isOrder, { method: "POST", body: { ship_country: country } });
+
+/** GET /api/cart/orders/{ref}: read-only; never calls PayPal. */
+export const getOrder = (ref: string, lang: Language) => orderRequest(`/${encodeURIComponent(ref)}`, lang, isOrder);
+
+/** POST /api/cart/orders/{ref}/cancel: end the order and release its stock hold. */
+export const cancelOrder = (ref: string, lang: Language) =>
+  orderRequest(`/${encodeURIComponent(ref)}/cancel`, lang, isOrder, { method: "POST" });
+
+/** POST /api/cart/orders/{ref}/paypal-order: approve the reviewed snapshot; returns PayPal's order id. */
+export const startPayment = (ref: string, versionHash: string, lang: Language) =>
+  orderRequest(
+    `/${encodeURIComponent(ref)}/paypal-order`,
+    lang,
+    (value): value is { paypal_order_id: string; order: Order } =>
+      isRecord(value) && typeof value.paypal_order_id === "string" && isOrder(value.order),
+    { method: "POST", body: { version_hash: versionHash } },
+  );
+
+/** POST /api/cart/orders/{ref}/capture: the server captures and verifies with PayPal. */
+export const capturePayment = (ref: string, paypalOrderId: string, lang: Language) =>
+  orderRequest(`/${encodeURIComponent(ref)}/capture`, lang, isPayment, { method: "POST", body: { paypal_order_id: paypalOrderId } });
+
+/** POST /api/cart/orders/{ref}/reconcile: ask PayPal for the current state of an unclear payment. */
+export const reconcilePayment = (ref: string, lang: Language) =>
+  orderRequest(`/${encodeURIComponent(ref)}/reconcile`, lang, isPayment, { method: "POST" });

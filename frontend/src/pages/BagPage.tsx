@@ -5,25 +5,29 @@ import { TranslationNote } from "../components/catalogue/TranslationNote.tsx";
 import { PageIntro } from "../components/ui/PageIntro.tsx";
 import { PrimaryLink } from "../components/ui/links.tsx";
 import { formatCountdown, useCountdown } from "../features/cart/useCountdown.ts";
-import type { Cart, CartLine, CartReservation } from "../lib/api.ts";
+import { Checkout, PaymentReceipt } from "../features/checkout/Checkout.tsx";
+import type { Cart, CartLine, CartReservation, PaymentResult } from "../lib/api.ts";
 import { colourLabel, formatMoney, sizeLabel } from "../lib/format.ts";
 
 const MAX_QUANTITY = 10; // the API's per-line limit; the server still validates every change
 
 /**
  * The bag: lines, quantities, the server's subtotal, and a stock reservation with a countdown.
- * Every number shown comes from the API; nothing is totalled here. No checkout yet.
+ * Every number shown comes from the API; nothing is totalled here. Checkout (M3.4) pays with
+ * PayPal Sandbox through the backend.
  */
 export function BagPage() {
   const { cart, loading, problem, reload } = useCart();
+  const [receipt, setReceipt] = useState<PaymentResult | null>(null);
 
   return (
     <div className="mx-auto max-w-[90rem] px-4 pt-16 pb-24 sm:px-8 sm:pt-20">
       <title>Bag · Atlas Demo Outfitters</title>
       <PageIntro eyebrow="Your bag" title="Bag">
-        Live catalogue prices in US dollars. Nothing is held until you reserve your bag, and nothing can be bought yet.
+        Live catalogue prices in US dollars. Reserve your bag to hold the stock, then check out with PayPal Sandbox (no real money).
       </PageIntro>
       <div className="mt-12 border-t border-rule pt-8">
+        {receipt && <PaymentReceipt result={receipt} onDismiss={() => setReceipt(null)} />}
         {cart === null ? (
           loading ? (
             <div role="status" className="animate-pulse space-y-4" aria-label="Loading your bag">
@@ -40,9 +44,9 @@ export function BagPage() {
             </div>
           )
         ) : cart.lines.length === 0 ? (
-          <EmptyBag problem={problem?.action === "load" ? null : problem} />
+          receipt ? null : <EmptyBag problem={problem?.action === "load" ? null : problem} />
         ) : (
-          <FilledBag cart={cart} />
+          <FilledBag cart={cart} onResult={setReceipt} />
         )}
       </div>
     </div>
@@ -61,7 +65,7 @@ function EmptyBag({ problem }: { problem: CartProblem | null }) {
   );
 }
 
-function FilledBag({ cart }: { cart: Cart }) {
+function FilledBag({ cart, onResult }: { cart: Cart; onResult: (result: PaymentResult) => void }) {
   const { busy, problem, setQuantity, remove } = useCart();
   const [notice, setNotice] = useState<string | null>(null);
   const short = new Set(problem?.code === "insufficient_available_stock" ? problem.skus : []);
@@ -93,7 +97,7 @@ function FilledBag({ cart }: { cart: Cart }) {
           ))}
         </ul>
       </section>
-      <Summary cart={cart} notice={notice} onNotice={setNotice} />
+      <Summary cart={cart} notice={notice} onNotice={setNotice} onResult={onResult} />
     </div>
   );
 }
@@ -194,7 +198,17 @@ function QuantityStepper({
   );
 }
 
-function Summary({ cart, notice, onNotice }: { cart: Cart; notice: string | null; onNotice: (text: string | null) => void }) {
+function Summary({
+  cart,
+  notice,
+  onNotice,
+  onResult,
+}: {
+  cart: Cart;
+  notice: string | null;
+  onNotice: (text: string | null) => void;
+  onResult: (result: PaymentResult) => void;
+}) {
   const { busy, problem, reserve, release, reload } = useCart();
   const editProblem = problem && problem.action !== "add" ? problem : null;
 
@@ -222,11 +236,14 @@ function Summary({ cart, notice, onNotice }: { cart: Cart; notice: string | null
         <dd className="text-right text-base font-semibold tabular-nums">{formatMoney(cart.subtotal)}</dd>
       </dl>
       <p className="mt-3 text-xs text-ink-muted">
-        Shipping is estimated on each product page; taxes aren’t included. Checkout isn’t part of this demo yet.
+        Shipping is priced at checkout; taxes aren’t included.
       </p>
 
       <div className="mt-6 border-t border-rule pt-6" aria-live="polite">
-        {cart.reservation ? (
+        {cart.checkout ? (
+          <Checkout cart={cart} onResult={onResult} />
+        ) : cart.reservation ? (
+          <>
           <Reserved
             key={cart.reservation.id}
             reservation={cart.reservation}
@@ -237,6 +254,8 @@ function Summary({ cart, notice, onNotice }: { cart: Cart; notice: string | null
               void reload();
             }}
           />
+          <Checkout cart={cart} onResult={onResult} />
+          </>
         ) : (
           <div>
             <button

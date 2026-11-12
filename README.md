@@ -4,16 +4,16 @@ Multilingual AI commerce copilot for global small businesses: conversational pro
 
 **Live demo:** https://atlas-uema.onrender.com/ (Render free plan: the first request after a quiet period can take up to a minute while the service wakes up). Screenshots: [Demo](#demo).
 
-**Status: M3.3 (PayPal Sandbox payments and webhooks) + M5 MVP (AI product discovery).** On top of the M0 foundation, this build has:
+**Status: M3.4 (PayPal Sandbox checkout in the browser, with webhooks) + M5 MVP (AI product discovery).** On top of the M0 foundation, this build has:
 - **Catalogue (M1):** the demo catalogue (20 products, 60 variants, 5 languages), deterministic search, a product detail API, audited inventory with a never-negative available-stock invariant, and shipping-rate lookup.
 - **Cart (M2):** a cookie-identified cart API with time-limited stock reservations ([ADR-024](docs/DECISIONS.md)), and the frontend shopping bag.
 - **Orders (M3.1):** an immutable, hashed order snapshot that adopts the cart's reservation as its stock hold ([ADR-025](docs/DECISIONS.md)).
 - **PayPal Sandbox payments (M3.2):** the backend creates the PayPal order, captures it on the server, verifies the capture against PayPal's own record, reconciles unknown outcomes, and finalizes each payment once ([ADR-026](docs/DECISIONS.md)). It is verified with a real Sandbox purchase (see [Demo](#demo)). Sandbox only, USD only.
+- **Checkout (M3.4):** in the bag, reserve, choose the destination, review the server-priced order and pay with the PayPal Sandbox buttons; the receipt shows the verified result.
 - **PayPal webhooks (M3.3):** signature-verified `PAYMENT.CAPTURE.*` notifications that trigger reconciliation with PayPal (see [PayPal webhooks](#paypal-webhooks-m33)).
 - **Natural-language discovery (M5 MVP):** describe what you need on the Shop page; Google Gemini turns it into validated catalogue filters and the ordinary catalogue search returns the products (see [Gemini product discovery](#gemini-product-discovery-m5-mvp)).
 
 **Not implemented yet:**
-- the frontend checkout step (the PayPal JavaScript buttons, M3.4); today a payment is driven through the API;
 - Make.com automation;
 - the conversational assistant, AI-written answers and retrieval (RAG): only discovery uses AI so far.
 
@@ -39,6 +39,7 @@ Screens 1–6 were captured on 2026-11-12 from the app at the deployed commit (`
 | **3. Product detail**: real variant selection (colour, size, live stock state).<br>![Product detail with navy, size M selected](docs/screenshots/demo/03-product-detail.png) | **4. Shopping bag**: quantity and server-computed pricing.<br>![Shopping bag](docs/screenshots/demo/04-shopping-bag.png) |
 | **5. Active reservation**: the bag's stock is held, with a countdown.<br>![Bag with an active stock reservation](docs/screenshots/demo/05-active-reservation.png) | **6. PayPal checkout**: the USD 149.00 order on PayPal's Sandbox checkout.<br>![PayPal Sandbox checkout showing USD 149.00](docs/screenshots/demo/06-paypal-checkout.png) |
 | **7. Atlas paid order**: the backend's final result, order `paid`.<br>![Atlas order with status paid](docs/screenshots/demo/07-atlas-paid-order.png) | **8. PayPal Business activity**: independent evidence, payment **Completed**.<br>![PayPal Sandbox business activity: USD 149.00, Completed](docs/screenshots/demo/08-paypal-business-activity.png) |
+| **9. AI product discovery**: Groq answered when Gemini was unavailable; filters checked against the catalogue.<br>![AI discovery result](docs/screenshots/demo/09-ai-discovery.png) | **10. Checkout**: server-priced order review with PayPal Sandbox buttons.<br>![Checkout with PayPal buttons](docs/screenshots/demo/10-checkout-paypal-buttons.png) |
 
 ## Stack
 
@@ -156,7 +157,7 @@ Without these settings the backend logs `gemini discovery disabled` and discover
 - An unknown outcome is reconciled with PayPal, never guessed.
 - Configuration (`PAYPAL_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_MERCHANT_ID`) is documented in [.env.example](.env.example). Without it, the payment endpoints answer 503 and the rest of the shop keeps working.
 - Sandbox only, with test accounts and no real money.
-- The PayPal JavaScript buttons (M3.4) aren't built yet, so a payment is driven through the API. Webhooks are described below.
+- In the browser (M3.4), the bag's checkout loads PayPal's JavaScript SDK with the public client ID from `GET /api/checkout/config`. `createOrder` calls the backend, and `onApprove` asks the backend to capture. A declined payment method restarts PayPal; the receipt shows the server's verified result. Webhooks are described below.
 
 ## PayPal webhooks (M3.3)
 
