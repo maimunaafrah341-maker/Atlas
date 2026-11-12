@@ -20,6 +20,9 @@ REPO_DIR = BACKEND_DIR.parent
 DEFAULT_SQLITE_PATH = BACKEND_DIR / "var" / "atlas.db"
 # PayPal's documented merchant (payer) id format: 13 characters.
 PAYPAL_MERCHANT_ID_PATTERN = re.compile(r"^[2-9A-HJ-NP-Z]{13}$")
+# M5 (ADR-005): a Gemini model id; it becomes part of the API URL path, so nothing else is allowed.
+GEMINI_MODEL_PATTERN = re.compile(r"^gemini-[a-z0-9][a-z0-9.-]{0,62}$")
+DEFAULT_LLM_MODEL = "gemini-3.8-flash"
 
 
 class Environment(StrEnum):
@@ -74,6 +77,11 @@ class Settings(BaseSettings):
     paypal_client_secret: SecretStr = SecretStr("")  # never logged or shown (SecretStr repr)
     # The Sandbox business account's merchant id; every capture's payee must equal it.
     paypal_merchant_id: str = ""
+    # M5 (ADR-005, ADR-028): natural-language discovery. Enabled only when LLM_PROVIDER is
+    # "gemini" and GEMINI_API_KEY is set; otherwise discovery uses the keyword parser.
+    llm_provider: str = ""
+    llm_model: str = DEFAULT_LLM_MODEL
+    gemini_api_key: SecretStr = SecretStr("")  # never logged or shown (SecretStr repr)
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -140,6 +148,24 @@ class Settings(BaseSettings):
     @property
     def payments_enabled(self) -> bool:
         return self.paypal_problem is None
+
+    @property
+    def llm_problem(self) -> str | None:
+        """Why Gemini discovery is off, or None when it is configured. Never includes a value."""
+        provider = self.llm_provider.strip().lower()
+        if not provider:
+            return "LLM_PROVIDER is not set"
+        if provider != "gemini":
+            return "LLM_PROVIDER must be 'gemini' (the only adapter, ADR-005)"
+        if not GEMINI_MODEL_PATTERN.match(self.resolved_llm_model):
+            return "LLM_MODEL must be a Gemini model id such as gemini-3.8-flash"
+        if not self.gemini_api_key.get_secret_value().strip():
+            return "GEMINI_API_KEY is required"
+        return None
+
+    @property
+    def resolved_llm_model(self) -> str:
+        return self.llm_model.strip() or DEFAULT_LLM_MODEL
 
     @property
     def order_hold(self) -> timedelta:

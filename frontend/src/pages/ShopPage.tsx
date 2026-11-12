@@ -4,6 +4,7 @@ import { useCatalogueLanguage } from "../app/catalogueLanguage.tsx";
 import { CardSkeletons } from "../components/catalogue/CardSkeletons.tsx";
 import { ProductCard } from "../components/catalogue/ProductCard.tsx";
 import { PageIntro } from "../components/ui/PageIntro.tsx";
+import { DiscoveryPanel } from "../features/shop/DiscoveryPanel.tsx";
 import { FilterPanel } from "../features/shop/FilterPanel.tsx";
 import { ActiveFilters, Pagination, SearchForm, SortSelect } from "../features/shop/ShopControls.tsx";
 import {
@@ -58,6 +59,14 @@ export function ShopPage() {
       <PageIntro eyebrow="Catalogue" title={onlyCategory ? CATEGORY_LABELS[onlyCategory] : "Shop all"}>
         Every product, price and stock state here comes live from the demo catalogue. Prices are in US dollars.
       </PageIntro>
+
+      <DiscoveryPanel
+        language={language}
+        onApply={(patch) => {
+          apply(changeFilters(NO_FILTERS, { ...patch, sort: filters.sort }));
+          resultsHeading.current?.focus();
+        }}
+      />
 
       <div className="mt-12 flex flex-wrap items-end justify-between gap-x-8 gap-y-6 border-t border-rule pt-8">
         {/* Re-mount on a new search (e.g. back/forward or the header search) so the field follows the URL. */}

@@ -12,10 +12,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.models  # noqa: F401  (register every table, so all foreign keys resolve in a fresh process)
-from app.api import cart, catalog, checkout, health, shipping
+from app.api import cart, catalog, checkout, discovery, health, shipping
 from app.clock import Clock, SystemClock
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
+from app.domain.discovery.llm import GeminiClient, StructuredLLM
 from app.domain.payments.paypal import PayPalGateway, SandboxPayPalClient
 from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
@@ -57,10 +58,25 @@ def _paypal_gateway(settings: Settings) -> PayPalGateway | None:
     )
 
 
+def _llm(settings: Settings) -> StructuredLLM | None:
+    """The Gemini client when configured; otherwise None (discovery uses the keyword parser)."""
+    problem = settings.llm_problem
+    if problem is not None:
+        configured = bool(settings.llm_provider.strip())
+        (logger.error if configured else logger.info)("gemini discovery disabled", extra={"reason": problem})
+        return None
+    logger.info("gemini discovery enabled", extra={"model": settings.resolved_llm_model})
+    return GeminiClient(settings.gemini_api_key.get_secret_value().strip(), settings.resolved_llm_model)
+
+
 def create_app(
-    settings: Settings | None = None, *, clock: Clock | None = None, paypal: PayPalGateway | None = None
+    settings: Settings | None = None,
+    *,
+    clock: Clock | None = None,
+    paypal: PayPalGateway | None = None,
+    llm: StructuredLLM | None = None,
 ) -> FastAPI:
-    """``paypal``: tests inject a fake gateway; otherwise it comes from the settings (or is None)."""
+    """``paypal`` and ``llm``: tests inject fakes; otherwise they come from the settings (or are None)."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     engine = create_db_engine(settings.database_url)
@@ -75,6 +91,8 @@ def create_app(
         gateway = _app.state.paypal
         if isinstance(gateway, SandboxPayPalClient):
             gateway.close()
+        if isinstance(_app.state.llm, GeminiClient):
+            _app.state.llm.close()
         engine.dispose()
 
     app = FastAPI(
@@ -92,6 +110,8 @@ def create_app(
     app.state.clock = clock or SystemClock()
     # M3.2: the PayPal gateway, or None when payments are disabled (payment endpoints answer 503).
     app.state.paypal = paypal if paypal is not None else _paypal_gateway(settings)
+    # M5: the LLM for discovery, or None (discovery then uses the deterministic keyword parser).
+    app.state.llm = llm if llm is not None else _llm(settings)
 
     # Outermost: security headers on every response, and the last-resort JSON 500.
     app.add_middleware(SafetyMiddleware)
@@ -102,6 +122,7 @@ def create_app(
     app.include_router(cart.router)
     app.include_router(checkout.router)
     app.include_router(checkout.config_router)
+    app.include_router(discovery.router)
 
     dist = settings.frontend_dist_dir
     if dist is not None and (dist / "index.html").is_file():

@@ -435,3 +435,69 @@ export async function reserveCart(lang: Language, timeoutMs?: number): Promise<{
 export async function releaseCart(lang: Language, timeoutMs?: number): Promise<Cart> {
   return (await cartRequest("/reservation", lang, { method: "DELETE" }, undefined, timeoutMs)).cart;
 }
+
+// --- Discovery (backend app/api/discovery.py, M5) ---------------------------------------------
+
+/** What the shopper asked for, in catalogue codes. Produced by Gemini or the keyword parser. */
+export interface DiscoveryIntent {
+  categories: Category[];
+  sizes: Size[];
+  colours: Colour[];
+  tags: string[];
+  keywords: string[];
+}
+
+export interface Discovery {
+  /** "gemini": Gemini's intent, validated by the backend. "keywords": the deterministic fallback. */
+  source: "gemini" | "keywords";
+  /** The Gemini model id, when source is "gemini". */
+  model: string | null;
+  /** Why the keyword parser was used ("not_configured", "invalid_output", "unavailable: …"). */
+  fallback_reason: string | null;
+  intent: DiscoveryIntent;
+  /** Constraints the backend dropped because nothing matched them. */
+  relaxed: ("keywords" | "tags")[];
+  /** Products from the ordinary catalogue search, exactly as on the Shop page. */
+  results: ProductPage;
+}
+
+/** The longest request the API accepts. */
+export const MAX_DISCOVERY_LENGTH = 300;
+
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+function isDiscovery(value: unknown): value is Discovery {
+  const intent = isRecord(value) ? value.intent : null;
+  return (
+    isRecord(value) &&
+    (value.source === "gemini" || value.source === "keywords") &&
+    (value.model === null || typeof value.model === "string") &&
+    (value.fallback_reason === null || typeof value.fallback_reason === "string") &&
+    isRecord(intent) &&
+    Array.isArray(intent.categories) &&
+    intent.categories.every(isCategory) &&
+    isStrings(intent.sizes) &&
+    isStrings(intent.colours) &&
+    isStrings(intent.tags) &&
+    isStrings(intent.keywords) &&
+    isStrings(value.relaxed) &&
+    isProductPage(value.results)
+  );
+}
+
+/**
+ * POST /api/discovery: describe what you need in your own words. The backend asks Gemini for a
+ * structured intent (or falls back to keyword matching) and returns real catalogue products.
+ * Read-only: it never changes the bag.
+ */
+export async function discoverProducts(
+  query: string,
+  lang: Language,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Discovery> {
+  const raw = await requestJson("/api/discovery", signal, timeoutMs, { method: "POST", body: { query, lang } });
+  if (!raw.ok) throw errorFrom(raw);
+  if (!isDiscovery(raw.body)) throw new ApiError("Unexpected discovery response from the server.", raw.status);
+  return raw.body;
+}
