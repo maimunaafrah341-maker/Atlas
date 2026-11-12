@@ -12,13 +12,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TypeVar
 
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.orm import Session
 
 from app.domain.cart.models import Cart
 from app.domain.catalog.models import Variant
 from app.domain.inventory.models import InventoryMovement
 from app.domain.orders.models import Order
+from app.domain.payments.models import Payment
 from app.domain.reservations.models import Reservation
 from app.domain.shipping.models import ShippingRate, ShippingRateCountry
 
@@ -100,4 +101,21 @@ def cart_reservation_id(session: Session, cart_id: int) -> int:
     return look(
         session,
         lambda: session.execute(select(Reservation.id).where(Reservation.cart_id == cart_id)).scalar_one(),
+    )
+
+
+def mark_paid(session: Session, order_id: int) -> None:
+    """Inside the caller's transaction: what finalization records for a verified capture (tests only)."""
+    paypal_order_id = f"PP-{order_id}"
+    session.execute(update(Order).where(Order.id == order_id).values(status="paid", paypal_order_id=paypal_order_id))
+    session.execute(
+        insert(Payment).values(
+            order_id=order_id,
+            paypal_order_id=paypal_order_id,
+            capture_id=f"CAP-{order_id}",
+            status="COMPLETED",
+            verification="verified",
+            source="capture",
+            created_at=func.now(),
+        )
     )

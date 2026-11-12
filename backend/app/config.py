@@ -6,17 +6,20 @@ here when they start using them; M0 reads only what it needs.
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_DIR = BACKEND_DIR.parent
 DEFAULT_SQLITE_PATH = BACKEND_DIR / "var" / "atlas.db"
+# PayPal's documented merchant (payer) id format: 13 characters.
+PAYPAL_MERCHANT_ID_PATTERN = re.compile(r"^[2-9A-HJ-NP-Z]{13}$")
 
 
 class Environment(StrEnum):
@@ -62,6 +65,15 @@ class Settings(BaseSettings):
     # M3 (ADR-025): creating an order adopts the cart's reservation and gives it a new, protected
     # deadline this many minutes away. Approved range 15-60.
     order_hold_minutes: int = Field(default=30, ge=15, le=60)
+    # M3.2 (ADR-019, ADR-026): PayPal Sandbox only. The API host is hard-coded in
+    # app.domain.payments.paypal; there is deliberately no base-URL setting. Payments are enabled
+    # only when PAYPAL_MODE is exactly "sandbox" and all three values below are set; otherwise
+    # the payment endpoints answer 503 and the rest of the shop keeps working.
+    paypal_mode: str = ""
+    paypal_client_id: str = ""
+    paypal_client_secret: SecretStr = SecretStr("")  # never logged or shown (SecretStr repr)
+    # The Sandbox business account's merchant id; every capture's payee must equal it.
+    paypal_merchant_id: str = ""
     # Set by Render for each deploy; shown by /api/health so a smoke test can confirm the build.
     render_git_commit: str = ""
 
@@ -109,6 +121,25 @@ class Settings(BaseSettings):
     @property
     def reservation_ttl(self) -> timedelta:
         return timedelta(minutes=self.reservation_ttl_minutes)
+
+    @property
+    def paypal_problem(self) -> str | None:
+        """Why payments are disabled, or None when the Sandbox configuration is complete.
+
+        Never includes a configured value: PAYPAL_MODE might hold anything, and the rest are
+        credentials or account identifiers.
+        """
+        if self.paypal_mode.strip().lower() != "sandbox":
+            return "PAYPAL_MODE must be 'sandbox' (Sandbox only, ADR-019)"
+        if not (self.paypal_client_id.strip() and self.paypal_client_secret.get_secret_value().strip()):
+            return "PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET are required"
+        if not PAYPAL_MERCHANT_ID_PATTERN.match(self.paypal_merchant_id.strip()):
+            return "PAYPAL_MERCHANT_ID must be the Sandbox business account's 13-character merchant id"
+        return None
+
+    @property
+    def payments_enabled(self) -> bool:
+        return self.paypal_problem is None
 
     @property
     def order_hold(self) -> timedelta:

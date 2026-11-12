@@ -392,7 +392,7 @@ def test_0004_accepts_a_balanced_linked_sale(database_url: str) -> None:
 
 def test_downgrade_refuses_when_order_history_exists(database_url: str) -> None:
     config = alembic_config(database_url)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0004_orders")  # 0004 on its own; 0005 has its own tests
     _seed_m1_stock(database_url)
     _hold_stock(database_url)
     _execute(database_url, ADOPT)
@@ -506,3 +506,100 @@ def test_sqlite_foreign_key_check_fails_the_migration_and_still_restores_enforce
     [(definition,)] = _rows(sqlite_url, "SELECT sql FROM sqlite_master WHERE name = 'reservations'")
     assert "order_hold" not in str(definition)  # the 0003 table, not the rebuilt one
     _orphan_item_rejected(sqlite_url)
+
+
+# --- 0005_payments -----------------------------------------------------------------------------
+
+M3_1_HEAD = "0004_orders"
+ORDER_ROWS = "SELECT id, public_ref, cart_id, reservation_id, status, version_hash, total_minor FROM orders ORDER BY id"
+PAYMENT = (
+    "INSERT INTO payments (order_id, paypal_order_id, capture_id, status, verification, source, created_at) "
+    "SELECT id, 'PP-1', 'CAP-1', 'COMPLETED', 'verified', 'capture', CURRENT_TIMESTAMP FROM orders"
+)
+
+
+def _order_0004(url: str) -> None:
+    _seed_m1_stock(url)
+    _hold_stock(url)
+    _execute(url, ADOPT)
+    _order(url, "c" * 32, "order_hold")
+
+
+def test_upgrade_to_0005_keeps_orders_and_the_open_order_index(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, M3_1_HEAD)
+    _order_0004(database_url)
+    before = _rows(database_url, ORDER_ROWS)
+
+    command.upgrade(config, "0005_payments")
+
+    assert _rows(database_url, ORDER_ROWS) == before
+    assert _rows(database_url, "SELECT capture_attempt, paypal_order_id, review_reason FROM orders") == [
+        (0, None, None)
+    ]
+    assert "payments" in MovementSchema(database_url).tables
+    # The rebuilt table still allows only one open order per cart.
+    _execute(database_url, SECOND_ACTIVE, {"public_id": "e" * 32})
+    with pytest.raises(IntegrityError):
+        _order(database_url, "f" * 32, "active")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE orders SET status = 'awaiting_payment'",  # a payment status needs the PayPal order
+        "UPDATE orders SET status = 'needs_review'",  # review needs a reason
+        "UPDATE orders SET review_reason = 'because'",  # closed vocabulary
+        "UPDATE orders SET capture_attempt = 1",  # an attempt records its request id and time
+        "UPDATE orders SET capture_attempt = -1",
+    ],
+)
+def test_0005_order_constraints(database_url: str, statement: str) -> None:
+    command.upgrade(alembic_config(database_url), "head")
+    _order_0004(database_url)
+    with pytest.raises(IntegrityError):
+        _execute(database_url, statement)
+
+
+def test_0005_payment_constraints(database_url: str) -> None:
+    command.upgrade(alembic_config(database_url), "head")
+    _order_0004(database_url)
+    _execute(database_url, PAYMENT)
+    with pytest.raises(IntegrityError):
+        _execute(database_url, PAYMENT)  # the same capture in the same status, twice
+    with pytest.raises(IntegrityError):
+        _execute(database_url, PAYMENT.replace("'CAP-1'", "'CAP-2'").replace("'verified'", "'mismatch'"))  # no problem
+
+
+def test_downgrade_refuses_when_payment_history_exists(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    _order_0004(database_url)
+    _execute(database_url, "UPDATE orders SET paypal_order_id = 'PP-1'")
+    with pytest.raises(RuntimeError, match="PayPal history"):
+        command.downgrade(config, M3_1_HEAD)
+    assert revision_of(database_url) == "0005_payments"
+
+
+def test_downgrade_0005_without_payments_restores_0004(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    _order_0004(database_url)
+    before = _rows(database_url, ORDER_ROWS)
+
+    command.downgrade(config, M3_1_HEAD)
+
+    assert revision_of(database_url) == M3_1_HEAD
+    assert "payments" not in MovementSchema(database_url).tables
+    engine = create_db_engine(database_url)
+    try:
+        columns = {column["name"] for column in inspect(engine).get_columns("orders")}
+    finally:
+        engine.dispose()
+    assert "paypal_order_id" not in columns
+    assert _rows(database_url, ORDER_ROWS) == before
+    _execute(database_url, SECOND_ACTIVE, {"public_id": "e" * 32})
+    with pytest.raises(IntegrityError):
+        _order(database_url, "f" * 32, "active")  # the partial index survived both rebuilds
+    command.upgrade(config, "head")
+    assert revision_of(database_url) == head_revision()

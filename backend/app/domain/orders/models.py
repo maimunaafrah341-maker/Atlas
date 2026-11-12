@@ -40,6 +40,22 @@ OPEN_STATUSES: tuple[str, ...] = PRE_CAPTURE_STATUSES + PAYMENT_IN_PROGRESS_STAT
 FINAL_STATUSES: tuple[str, ...] = ("paid", "payment_failed", "cancelled", "expired")
 ORDER_STATUSES: tuple[str, ...] = OPEN_STATUSES + FINAL_STATUSES
 
+# Statuses in which the PayPal order must exist (M3.2).
+PAYPAL_ORDER_STATUSES: tuple[str, ...] = ("awaiting_payment", "capturing", "payment_pending", "paid", "payment_failed")
+# Why an order needs a person to look at it (M3.2, ADR-026). Set with ``needs_review``; also on an
+# already-ended order when a verified payment turns up for it and its cart has another open order.
+REVIEW_REASONS: tuple[str, ...] = (
+    "amount_mismatch",
+    "currency_mismatch",
+    "reference_mismatch",
+    "order_mismatch",
+    "payee_mismatch",
+    "unexpected_status",
+    "unresolved_timeout",
+    "capture_after_end",
+    "paypal_order_conflict",
+)
+
 PUBLIC_REF_LENGTH = 32  # uuid4().hex
 VERSION_HASH_LENGTH = 64  # SHA-256 hex digest
 
@@ -69,6 +85,19 @@ class Order(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
     status_changed_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
+    # --- Payment (M3.2, ADR-026). Written before each PayPal call that relies on them. -----------
+    # One PayPal order per Atlas order: written once, by compare-and-set.
+    paypal_order_id: Mapped[str | None] = mapped_column(String(36), unique=True)
+    # The stable PayPal-Request-Id for creating that PayPal order (retries reuse it).
+    paypal_create_request_id: Mapped[str | None] = mapped_column(String(64))
+    approved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Capture attempts: a new attempt (and request id) only after a recoverable funding failure.
+    capture_attempt: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    capture_request_id: Mapped[str | None] = mapped_column(String(64))
+    capture_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    review_reason: Mapped[str | None] = mapped_column(String(32))
+
     items: Mapped[list[OrderItem]] = relationship(back_populates="order", order_by="OrderItem.variant_id")
 
     __table_args__ = (
@@ -83,6 +112,17 @@ class Order(Base):
         CheckConstraint("ship_country = upper(ship_country)", name="ship_country_upper"),
         CheckConstraint(sql_in("lang", LANGUAGES), name="lang"),
         CheckConstraint("hold_expires_at > created_at", name="hold_expires_after_creation"),
+        CheckConstraint("capture_attempt >= 0", name="capture_attempt_non_negative"),
+        CheckConstraint(
+            "(capture_attempt = 0) = (capture_request_id IS NULL AND capture_started_at IS NULL)",
+            name="capture_attempt_recorded",
+        ),
+        CheckConstraint(
+            f"NOT ({sql_in('status', PAYPAL_ORDER_STATUSES)}) OR paypal_order_id IS NOT NULL",
+            name="paypal_order_for_payment",
+        ),
+        CheckConstraint(f"review_reason IS NULL OR {sql_in('review_reason', REVIEW_REASONS)}", name="review_reason"),
+        CheckConstraint("status <> 'needs_review' OR review_reason IS NOT NULL", name="needs_review_has_reason"),
         # At most one open order per cart. Partial indexes work on both SQLite and PostgreSQL.
         Index("uq_orders_cart_id_open", "cart_id", unique=True, sqlite_where=OPEN_ONLY, postgresql_where=OPEN_ONLY),
         Index("ix_orders_status_hold_expires_at", "status", "hold_expires_at"),

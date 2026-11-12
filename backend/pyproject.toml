@@ -11,10 +11,11 @@ dependencies = [
   "sqlalchemy>=2.0",
   "alembic",
   "psycopg[binary]>=3.2",
+  "httpx",  # M3.2: PayPal Sandbox API client
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "httpx", "ruff", "mypy"]
+dev = ["pytest", "ruff", "mypy"]
 
 [tool.ruff]
 line-length = 120

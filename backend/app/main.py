@@ -16,6 +16,7 @@ from app.api import cart, catalog, checkout, health, shipping
 from app.clock import Clock, SystemClock
 from app.config import Settings, get_settings
 from app.db import create_db_engine, session_factory
+from app.domain.payments.paypal import PayPalGateway, SandboxPayPalClient
 from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
 from app.middleware import SafetyMiddleware
@@ -44,7 +45,22 @@ def _mount_spa(app: FastAPI, dist: Path) -> None:
         return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
-def create_app(settings: Settings | None = None, *, clock: Clock | None = None) -> FastAPI:
+def _paypal_gateway(settings: Settings) -> PayPalGateway | None:
+    """The Sandbox client when the configuration is complete; otherwise None (payments 503)."""
+    problem = settings.paypal_problem
+    if problem is not None:
+        configured = settings.paypal_mode.strip() or settings.paypal_client_id.strip()
+        (logger.error if configured else logger.info)("payments disabled", extra={"reason": problem})
+        return None
+    return SandboxPayPalClient(
+        settings.paypal_client_id.strip(), settings.paypal_client_secret.get_secret_value().strip()
+    )
+
+
+def create_app(
+    settings: Settings | None = None, *, clock: Clock | None = None, paypal: PayPalGateway | None = None
+) -> FastAPI:
+    """``paypal``: tests inject a fake gateway; otherwise it comes from the settings (or is None)."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     engine = create_db_engine(settings.database_url)
@@ -56,6 +72,9 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
             extra={"environment": settings.app_env.value, "dialect": engine.dialect.name, "version": settings.version},
         )
         yield
+        gateway = _app.state.paypal
+        if isinstance(gateway, SandboxPayPalClient):
+            gateway.close()
         engine.dispose()
 
     app = FastAPI(
@@ -71,6 +90,8 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     app.state.sessions = session_factory(engine)
     # The cart and reservation services compare times in SQL against this clock (tests inject one).
     app.state.clock = clock or SystemClock()
+    # M3.2: the PayPal gateway, or None when payments are disabled (payment endpoints answer 503).
+    app.state.paypal = paypal if paypal is not None else _paypal_gateway(settings)
 
     # Outermost: security headers on every response, and the last-resort JSON 500.
     app.add_middleware(SafetyMiddleware)

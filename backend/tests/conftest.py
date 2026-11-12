@@ -29,9 +29,8 @@ TEST_DATABASE_URL = normalize_database_url(os.environ.get("TEST_DATABASE_URL", "
 REQUIRE_POSTGRES_TESTS = os.environ.get("REQUIRE_POSTGRES_TESTS", "").strip() == "1"
 # At least this many postgres-marked tests must pass, so deleting or unmarking one can't
 # quietly weaken the guard. Raise it whenever concurrency tests are added.
-MIN_POSTGRES_TESTS = (
-    20  # 3 (M1, M2.2 primitives) + 12 (test_reservation_concurrency.py) + 5 (test_order_concurrency.py)
-)
+# 3 (M1, M2.2 primitives) + 12 (reservation concurrency) + 5 (order concurrency) + 4 (payment concurrency)
+MIN_POSTGRES_TESTS = 24
 _postgres_outcomes: dict[str, str] = {}
 
 
