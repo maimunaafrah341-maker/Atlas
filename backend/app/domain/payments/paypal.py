@@ -276,15 +276,29 @@ class SandboxPayPalClient:
     # Webhooks v1 (M3.3) ------------------------------------------------------------------------
 
     def verify_webhook_signature(self, transmission: WebhookTransmission, *, webhook_id: str, raw_event: bytes) -> bool:
-        """True only when PayPal answers ``verification_status: SUCCESS``.
+        """True for HTTP 2xx with ``verification_status: SUCCESS``; False **only** for HTTP 2xx with
+        ``verification_status: FAILURE``, the one answer that says the signature is invalid.
 
-        ``FAILURE`` (or any other answer) is False. Transport failures and 5xx raise
-        ``PayPalUnavailable``; a 4xx raises ``PayPalRejected``. ValueError if ``raw_event`` isn't
-        one JSON object (nothing is sent).
+        Everything else raises ``PayPalUnavailable``, so the delivery stays retryable: a timeout
+        or connection failure, any non-2xx answer (a 4xx here means our verification request,
+        credentials or configuration failed, not that the webhook's signature is invalid), an
+        unreadable body, or a 2xx with any other status. ValueError if ``raw_event`` isn't one
+        JSON object (nothing is sent).
         """
         content = webhook_verification_body(transmission, webhook_id=webhook_id, raw_event=raw_event)
-        data, _debug_id = self._call("POST", "/v1/notifications/verify-webhook-signature", content=content)
-        return data.get("verification_status") == "SUCCESS"
+        try:
+            data, debug_id = self._call("POST", "/v1/notifications/verify-webhook-signature", content=content)
+        except PayPalRejected as error:  # includes a 4xx from the token request
+            raise PayPalUnavailable(
+                f"PayPal webhook verification request failed: HTTP {error.status_code} {error.issue or ''}".rstrip(),
+                debug_id=error.debug_id,
+            ) from None
+        status = data.get("verification_status")
+        if status == "SUCCESS":
+            return True
+        if status == "FAILURE":
+            return False
+        raise PayPalUnavailable("PayPal webhook verification without a recognised status", debug_id=debug_id)
 
     # Plumbing ----------------------------------------------------------------------------------
 

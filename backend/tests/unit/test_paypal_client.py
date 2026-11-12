@@ -303,36 +303,43 @@ def test_webhook_verification_sends_the_received_event_bytes_unchanged() -> None
     }
 
 
-@pytest.mark.parametrize(
-    "answer",
-    [{"verification_status": "FAILURE"}, {"verification_status": "success"}, {"verification_status": None}, {"x": 1}],
-)
-def test_anything_but_success_is_not_verified(answer: dict[str, Any]) -> None:
-    recorder = Recorder(httpx.Response(200, json=answer))
+def test_only_http_200_with_failure_rejects_the_signature() -> None:
+    recorder = Recorder(httpx.Response(200, json={"verification_status": "FAILURE"}))
     assert client(recorder).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT) is False
 
 
 @pytest.mark.parametrize(
     "failure",
     [
+        # The verification request itself failed (our request, credentials or configuration):
+        # that says nothing about the webhook's signature, so the delivery must stay retryable.
+        httpx.Response(400, json={"name": "VALIDATION_ERROR", "details": [{"issue": "INVALID_WEBHOOK_ID"}]}),
+        httpx.Response(401, json={"name": "AUTHENTICATION_FAILURE"}),  # twice: after the token refresh too
+        httpx.Response(403, json={"name": "NOT_AUTHORIZED"}),
+        httpx.Response(404, json={"name": "RESOURCE_NOT_FOUND"}),
+        httpx.Response(422, json={"name": "UNPROCESSABLE_ENTITY"}),
+        httpx.Response(500, json={"name": "INTERNAL_SERVER_ERROR"}),
+        httpx.Response(503, text="unavailable"),
         httpx.ReadTimeout("timed out"),
         httpx.ConnectError("refused"),
-        httpx.Response(500, json={"name": "INTERNAL_SERVER_ERROR"}),
         httpx.Response(200, text="not json"),
+        httpx.Response(200, json={"verification_status": "success"}),  # not PayPal's value
+        httpx.Response(200, json={"verification_status": None}),
+        httpx.Response(200, json={"something": "else"}),
     ],
 )
-def test_an_unknown_verification_outcome_is_unavailable(failure: httpx.Response | Exception) -> None:
+def test_every_other_verification_outcome_is_unavailable(failure: httpx.Response | Exception) -> None:
+    responses = [failure, failure] if isinstance(failure, httpx.Response) and failure.status_code == 401 else [failure]
     with pytest.raises(PayPalUnavailable):
-        client(Recorder(failure)).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT)
+        client(Recorder(*responses)).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT)
 
 
-def test_a_refused_verification_request_is_rejected() -> None:
-    body = {"name": "VALIDATION_ERROR", "details": [{"issue": "INVALID_WEBHOOK_ID"}], "debug_id": "dbg-v"}
-    with pytest.raises(PayPalRejected) as raised:
-        client(Recorder(httpx.Response(400, json=body))).verify_webhook_signature(
-            TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT
-        )
-    assert (raised.value.status_code, raised.value.issue) == (400, "INVALID_WEBHOOK_ID")
+def test_a_refused_token_request_is_unavailable_not_a_bad_signature() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "invalid_client"})  # e.g. wrong client credentials
+
+    with pytest.raises(PayPalUnavailable):
+        client(handler).verify_webhook_signature(TRANSMISSION, webhook_id=WEBHOOK_ID, raw_event=RAW_EVENT)
 
 
 @pytest.mark.parametrize(
