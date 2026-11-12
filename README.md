@@ -10,7 +10,6 @@ Multilingual AI commerce copilot for global small businesses: conversational pro
 
 **Not implemented yet:**
 - the frontend checkout step (the PayPal JavaScript buttons, M3.4); today a payment is driven through the API;
-- PayPal webhooks (M3.3);
 - Make.com automation;
 - the AI and retrieval features.
 
@@ -115,6 +114,26 @@ On 2026-11-12 a full purchase was run end to end against the PayPal **Sandbox**,
 | Atlas order (`GET /api/cart/orders/{ref}`) | PayPal Sandbox merchant activity |
 |---|---|
 | ![Atlas order with status paid](docs/screenshots/m3-2-sandbox/atlas-order-paid.png) | ![PayPal Sandbox activity: payment of USD 149.00, Completed](docs/screenshots/m3-2-sandbox/paypal-sandbox-activity-completed.png) |
+
+## PayPal webhooks (M3.3)
+
+`POST /api/webhooks/paypal` receives PayPal Sandbox webhook events. A webhook is a **notification, never evidence**: payment state always comes from PayPal's API ([ADR-027](docs/DECISIONS.md)).
+
+- **Events acted on:** `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.PENDING` and `PAYMENT.CAPTURE.DENIED`. Other events, including `CHECKOUT.ORDER.APPROVED`, are acknowledged and recorded as `ignored`. A webhook never captures.
+- **Verification:** every delivery goes to PayPal's `verify-webhook-signature` API, with the raw body bytes unchanged and the configured `PAYPAL_WEBHOOK_ID`. Only a `FAILURE` answer rejects it (400). An unreachable or failing verification request is retryable (503).
+- **Processing:** each event ID is recorded once, with a delivery count; duplicates are acknowledged without asking PayPal again. The event's order is matched strictly by its PayPal order ID, or by the Atlas reference only when no PayPal order ID is present. Conflicting identifiers give `unmatched`. Atlas then reads the order and capture **from PayPal** and applies the result through the same `finalize` as the capture flow. The event body's amount and status are never used.
+- **Retries:**
+  - **503** when PayPal is unavailable, or its state hasn't caught up with the event (for example a COMPLETED event while the capture still reads PENDING). The event stays unprocessed and PayPal redelivers it.
+  - **200** for processed, duplicate, ignored and unmatched events.
+  - **400** for malformed deliveries and rejected signatures.
+  - **413** for bodies over 64 KB.
+- **Safety:**
+  - No cart cookie and no Origin check, because PayPal's servers have neither; the signature check authenticates instead.
+  - Responses are `no-store` and never set a cookie.
+  - The body, transmission headers and payer data are never stored or logged.
+  - A missing, duplicated, late or contradictory event never releases stock.
+- **Limitations:** refunds and reversals (`PAYMENT.CAPTURE.REFUNDED` / `REVERSED`) are **not processed**. They are recorded as `ignored` and logged for a person: future work.
+- **Setup:** register the webhook on the same Sandbox app as `PAYPAL_CLIENT_ID`, subscribed to the three events, pointing at `https://<host>/api/webhooks/paypal`. Set `PAYPAL_WEBHOOK_ID` (see [.env.example](.env.example)). For a local test, a temporary HTTPS tunnel (e.g. a Cloudflare Quick Tunnel) can expose the dev backend.
 
 ## Seeding
 

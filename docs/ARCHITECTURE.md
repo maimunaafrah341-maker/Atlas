@@ -97,7 +97,7 @@ All money is stored as an **integer in minor units (USD cents) plus an ISO 4217 
 | `orders` (M3.1) | public_ref, cart_id, reservation_id (unique), status, version_hash, currency, subtotal/shipping/total_minor, ship_country, shipping_zone, lang, hold_expires_at | State machine §5; adopts the cart's reservation (ADR-025); at most one open order per cart |
 | `order_items` (M3.1) | order_id, variant_id, sku, product_slug, name_snapshot, size, colour, unit_price_minor, qty, line_total_minor | **Immutable** snapshot |
 | `payments` (M3.2) | order_id, paypal_order_id, capture_id, status, status_reason, amount_minor, currency, invoice_id, related_order_id, payee_merchant_id, verification, problem, source, debug_id | Evidence read back from PayPal's capture record, unique per (capture, status). No raw bodies, no payer data (ADR-026) |
-| `paypal_webhook_events` | event_id **UNIQUE**, type, verified, processed_at | Dedup key |
+| `paypal_webhook_events` (M3.3) | event_id **UNIQUE** (≤ 64), event_type, order_id (nullable, FK RESTRICT), outcome, deliveries, received_at, last_received_at, processed_at | Dedup and audit; only verified deliveries are recorded. No body, headers or payer data (ADR-027) |
 | `outbox_events` | id (UUID = idempotency key), type, payload, status, attempts, max_attempts, next_attempt_at, lease_until, last_error, created_at, delivered_at | §4.3 |
 | `automation_deliveries` / `automation_callbacks` | event_id, attempt, http_status, duration_ms, error · event_id, make_status, detail | History view |
 | `exceptions` | type, severity, order_id?, context, status, resolved_note | Exception centre |
@@ -208,8 +208,10 @@ Customer        SPA                 Backend                              PayPal 
   │             │        ─► one DB txn: order paid, reservation committed, stock decremented,
   │             │                       outbox(order.paid), outbox(stock.low)?
   │ ◄─ confirmation (status read from DB)
-                         PayPal ── webhook PAYMENT.CAPTURE.* ─► verify signature via PayPal API
-                                   ─► dedupe by event_id ─► reconcile (no-op if already paid)
+                         PayPal ── POST /api/webhooks/paypal (PAYMENT.CAPTURE.COMPLETED | PENDING | DENIED)
+                                   ─► verify signature via PayPal API (raw bytes, PAYPAL_WEBHOOK_ID)
+                                   ─► record delivery once per event_id ─► reconcile via GET order/capture
+                                   ─► finalize (no-op if already applied); never captures
 ```
 The capture is triggered by the customer's action in the PayPal UI and executed by the backend. The LLM has no path to create, approve or capture a payment. The demo uses a Sandbox merchant account and an **international Sandbox buyer** checking out in USD. Atlas makes no claim about domestic Indian PayPal payments.
 
