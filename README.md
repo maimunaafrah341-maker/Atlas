@@ -2,13 +2,19 @@
 
 Multilingual AI commerce copilot for global small businesses: conversational product discovery, grounded merchant knowledge, validated carts, PayPal Sandbox checkout and Make.com automation. *Atlas* is an internal codename.
 
-**Status: M1 (catalogue, inventory, shipping).** On top of the M0 foundation, this build has:
-- the demo catalogue: 20 products, 60 variants, 5 languages;
-- deterministic catalogue search and a product detail API;
-- audited inventory with a never-negative available-stock invariant;
-- shipping-rate lookup.
+**Status: M3.2 (PayPal Sandbox payments).** On top of the M0 foundation, this build has:
+- **Catalogue (M1):** the demo catalogue (20 products, 60 variants, 5 languages), deterministic search, a product detail API, audited inventory with a never-negative available-stock invariant, and shipping-rate lookup.
+- **Cart (M2):** a cookie-identified cart API with time-limited stock reservations ([ADR-024](docs/DECISIONS.md)), and the frontend shopping bag.
+- **Orders (M3.1):** an immutable, hashed order snapshot that adopts the cart's reservation as its stock hold ([ADR-025](docs/DECISIONS.md)).
+- **PayPal Sandbox payments (M3.2):** the backend creates the PayPal order, captures it on the server, verifies the capture against PayPal's own record, reconciles unknown outcomes, and finalizes each payment once ([ADR-026](docs/DECISIONS.md)). It is verified with a real Sandbox purchase (see [below](#paypal-sandbox-verification-m32)). Sandbox only, USD only.
 
-**No AI, retrieval, cart, checkout, PayPal or Make features are implemented yet.** See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+**Not implemented yet:**
+- the frontend checkout step (the PayPal JavaScript buttons, M3.4); today a payment is driven through the API;
+- PayPal webhooks (M3.3);
+- Make.com automation;
+- the AI and retrieval features.
+
+See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 > **Demo data disclosure.** "Atlas Demo Outfitters" is a fictional, temporary brand. Products, specifications and prices are invented. The es, fr, de and pt-BR product text is **machine-generated and not reviewed by native speakers**; it is flagged `machine_translated` in the data and API. Shipping rates are **fictional demo pricing assumptions, not real or carrier-validated shipping costs**. The fictional merchant ships from India to international destinations only. This story detail makes no claim about PayPal account capabilities.
 
@@ -97,6 +103,18 @@ python scripts/smoke_test.py https://<service>.onrender.com --expect-dialect pos
 - **Stock:** shown only as `in_stock`, `low_stock` or `out_of_stock`, never as a count.
 - **Errors:** every error is `{"error": {"code", "message", "details"}}`. Server errors (5xx) return a generic message and `details: [{"reference": "<id>"}]`; the real error is logged once under that reference and never sent to the client.
 - **Search limitation:** search matches whole words and word starts, with no stemming ([ADR-021](docs/DECISIONS.md)).
+
+## PayPal Sandbox verification (M3.2)
+
+On 2026-11-12 a full purchase was run end to end against the PayPal **Sandbox**, with test accounts and no real money: one Ridgeline Rain Shell (S, navy), USD 129.00 plus USD 20.00 shipping to FR, **USD 149.00** in total.
+
+- The buyer approved the order on PayPal's Sandbox page. The backend then captured it, checked the capture with PayPal ([ADR-026](docs/DECISIONS.md)) and moved the Atlas order to `paid`.
+- The stock reservation was committed and the bag emptied.
+- The Sandbox Business account's activity shows the payment as **Completed**.
+
+| Atlas order (`GET /api/cart/orders/{ref}`) | PayPal Sandbox merchant activity |
+|---|---|
+| ![Atlas order with status paid](docs/screenshots/m3-2-sandbox/atlas-order-paid.png) | ![PayPal Sandbox activity: payment of USD 149.00, Completed](docs/screenshots/m3-2-sandbox/paypal-sandbox-activity-completed.png) |
 
 ## Seeding
 
