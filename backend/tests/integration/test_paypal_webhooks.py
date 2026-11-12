@@ -74,6 +74,7 @@ class Delivery:
         c: Checkout | None = None,
         paypal_order_id: str | None = None,
         invoice_id: str | None = None,
+        names_paypal_order: bool = True,
         claims: str = "COMPLETED",
         create_time: str = "2026-11-12T10:42:13.000Z",
     ) -> bytes:
@@ -84,10 +85,10 @@ class Delivery:
             "amount": {"currency_code": "USD", "value": "1.00"},  # never what the order costs
             "payee": {"email_address": "merchant@example.com", "merchant_id": MERCHANT},
             "payer": {"email_address": PAYER_EMAIL, "name": {"given_name": "John", "surname": "Doe"}},
-            "supplementary_data": {
-                "related_ids": {"order_id": paypal_order_id or (c.paypal_order_id if c else "UNKNOWN-ORDER")}
-            },
         }
+        if names_paypal_order:
+            related = {"order_id": paypal_order_id or (c.paypal_order_id if c else "UNKNOWN-ORDER")}
+            resource["supplementary_data"] = {"related_ids": related}
         if invoice_id or c:
             resource["invoice_id"] = invoice_id or (c.ref if c else None)
         body = {
@@ -185,14 +186,60 @@ def test_a_completed_event_after_a_lost_capture_response_finalizes_exactly_once(
     assert row.deliveries == 2
 
 
-def test_a_completed_event_is_matched_by_the_order_reference_too(
+def test_without_a_paypal_order_id_the_atlas_reference_matches(
     s: Session, clock: FixedClock, paypal: fake.FakePayPal, deliver: Delivery
 ) -> None:
     c = lost_capture(s, clock, paypal)
-    raw = deliver.event(COMPLETED, c=c, paypal_order_id="NOT-THIS-ONE", invoice_id=c.ref)
-    assert deliver(raw).outcome == "paid"
-    # PayPal was asked about the order's STORED PayPal order, never the one the body named.
+    assert deliver(deliver.event(COMPLETED, invoice_id=c.ref, names_paypal_order=False)).outcome == "paid"
+    assert (c.status, sales(s)) == ("paid", 1)
+    row = deliver.row()
+    assert row is not None
+    assert row.order_id == c.field(Order.id)
+    # PayPal was asked about the order's STORED PayPal order.
     assert {call[1] for call in deliver.paypal.calls_to("get_order")} == {c.paypal_order_id}
+
+
+@pytest.mark.parametrize("named", ["SOMEONE-ELSES-ORDER", "not a paypal id!"])
+def test_an_unknown_paypal_order_id_is_unmatched_even_with_a_valid_reference(
+    s: Session, clock: FixedClock, paypal: fake.FakePayPal, deliver: Delivery, named: str
+) -> None:
+    c = lost_capture(s, clock, paypal)
+    reads = deliver.paypal_reads()
+    result = deliver(deliver.event(COMPLETED, paypal_order_id=named, invoice_id=c.ref))
+    assert result.outcome == "unmatched"  # no fallback to the reference
+    assert deliver.paypal_reads() == reads
+    row = deliver.row()
+    assert row is not None
+    assert (row.order_id, row.outcome) == (None, "unmatched")
+    assert row.processed_at is not None
+    assert (c.status, c.hold, sales(s)) == ("capturing", "order_hold", 0)
+
+
+def test_identifiers_pointing_at_two_different_orders_are_unmatched(
+    s: Session, clock: FixedClock, paypal: fake.FakePayPal, deliver: Delivery
+) -> None:
+    first = lost_capture(s, clock, paypal)
+    second = Checkout(s, clock, paypal, {"A-M": 1}).approved()
+    reads = deliver.paypal_reads()
+    result = deliver(deliver.event(COMPLETED, paypal_order_id=first.paypal_order_id, invoice_id=second.ref))
+    assert result.outcome == "unmatched"
+    assert deliver.paypal_reads() == reads  # neither order was reconciled
+    row = deliver.row()
+    assert row is not None
+    assert (row.order_id, row.outcome) == (None, "unmatched")  # nor associated
+    assert (first.status, first.hold) == ("capturing", "order_hold")
+    assert (second.status, second.hold) == ("awaiting_payment", "order_hold")
+    assert sales(s) == 0
+
+
+def test_a_reference_matching_the_named_paypal_order_is_consistent(
+    s: Session, clock: FixedClock, paypal: fake.FakePayPal, deliver: Delivery
+) -> None:
+    c = lost_capture(s, clock, paypal)
+    unknown_reference = deliver.event(COMPLETED, c=c, invoice_id="e" * 32, event_id="WH-2")
+    assert deliver(deliver.event(COMPLETED, c=c)).outcome == "paid"  # both identify the same order
+    # A reference that belongs to no order isn't a conflict: the PayPal order id decides.
+    assert deliver(unknown_reference).outcome == "paid"
 
 
 def test_the_event_body_never_overrides_paypal(

@@ -121,8 +121,11 @@ class WebhookRetryLater(AtlasError):
 class WebhookEvent:
     event_id: str
     event_type: str
-    paypal_order_id: str | None  # resource.supplementary_data.related_ids.order_id
+    paypal_order_id: str | None  # resource.supplementary_data.related_ids.order_id, if well formed
     order_ref: str | None  # resource.invoice_id, else resource.custom_id (the Atlas reference)
+    # Whether the event named a PayPal order at all (even a malformed one): if it did, that order
+    # decides the match and the Atlas reference is never used as a fallback.
+    names_paypal_order: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,11 +164,13 @@ def parse_event(raw_event: bytes) -> WebhookEvent:
         raise WebhookMalformed()  # includes an id longer than 64 characters: refused, never truncated
     resource = _dict(data.get("resource"))
     related = _dict(_dict(resource.get("supplementary_data")).get("related_ids"))
+    named = related.get("order_id")
     return WebhookEvent(
         event_id=event_id,
         event_type=event_type,
-        paypal_order_id=_match(_PAYPAL_ORDER_ID, related.get("order_id")),
+        paypal_order_id=_match(_PAYPAL_ORDER_ID, named),
         order_ref=_match(_ORDER_REF, resource.get("invoice_id")) or _match(_ORDER_REF, resource.get("custom_id")),
+        names_paypal_order=named is not None,
     )
 
 
@@ -228,9 +233,9 @@ def handle_webhook(
                 logger.info("paypal webhook ignored", extra=log)
             return WebhookResult(event.event_id, event.event_type, IGNORED, duplicate=False)
         matched = _find_order(session, event)
-        if matched is None:
+        if isinstance(matched, str):
             _settle(session, row_id, None, UNMATCHED, now)
-            logger.warning("paypal webhook matches no order", extra=log)
+            logger.warning("paypal webhook matches no order", extra={**log, "match": matched})
             return WebhookResult(event.event_id, event.event_type, UNMATCHED, duplicate=False)
         order_id, order_ref = matched
         _link(session, row_id, order_id)
@@ -308,27 +313,41 @@ def _record_delivery(session: Session, event: WebhookEvent, now: datetime) -> tu
     return row.id, row.processed_at, row.outcome
 
 
-def _find_order(session: Session, event: WebhookEvent) -> tuple[int, str] | None:
-    """The Atlas order the event points at, by its PayPal order id, else by our reference.
+def _find_order(session: Session, event: WebhookEvent) -> tuple[int, str] | str:
+    """The Atlas order the event points at as ``(id, reference)``, or why there is none.
 
-    Only orders that have a PayPal order qualify: reconciliation reads that stored id, never one
-    from the event.
+    1. The event names a PayPal order: only that decides. No Atlas order with it (or a malformed
+       id) is ``unmatched``: the Atlas reference is **not** a fallback then.
+    2. It also carries an Atlas reference belonging to a *different* order: the identifiers
+       conflict, so neither order is associated or reconciled.
+    3. Only when it names no PayPal order is the Atlas reference used, and only for an order
+       that has a PayPal order.
+
+    Reconciliation then reads the matched order's **stored** PayPal order id, never the event's.
     """
-    if event.paypal_order_id is not None:
+    if event.names_paypal_order:
+        if event.paypal_order_id is None:
+            return "malformed_paypal_order_id"
         row = session.execute(
             select(Order.id, Order.public_ref).where(Order.paypal_order_id == event.paypal_order_id)
         ).one_or_none()
-        if row is not None:
-            return row.id, row.public_ref
-    if event.order_ref is not None:
-        row = session.execute(
-            select(Order.id, Order.public_ref).where(
-                Order.public_ref == event.order_ref, Order.paypal_order_id.is_not(None)
-            )
-        ).one_or_none()
-        if row is not None:
-            return row.id, row.public_ref
-    return None
+        if row is None:
+            return "unknown_paypal_order_id"
+        if event.order_ref is not None and event.order_ref != row.public_ref:
+            other = session.execute(select(Order.id).where(Order.public_ref == event.order_ref)).one_or_none()
+            if other is not None:
+                return "conflicting_identifiers"
+        return row.id, row.public_ref
+    if event.order_ref is None:
+        return "no_identifier"
+    row = session.execute(
+        select(Order.id, Order.public_ref).where(
+            Order.public_ref == event.order_ref, Order.paypal_order_id.is_not(None)
+        )
+    ).one_or_none()
+    if row is None:
+        return "unknown_order_reference"
+    return row.id, row.public_ref
 
 
 def _link(session: Session, row_id: int, order_id: int) -> None:
