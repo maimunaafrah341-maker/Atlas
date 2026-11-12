@@ -573,7 +573,7 @@ def test_0005_payment_constraints(database_url: str) -> None:
 
 def test_downgrade_refuses_when_payment_history_exists(database_url: str) -> None:
     config = alembic_config(database_url)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0005_payments")  # 0005 on its own; 0006 has its own tests
     _order_0004(database_url)
     _execute(database_url, "UPDATE orders SET paypal_order_id = 'PP-1'")
     with pytest.raises(RuntimeError, match="PayPal history"):
@@ -603,3 +603,237 @@ def test_downgrade_0005_without_payments_restores_0004(database_url: str) -> Non
         _order(database_url, "f" * 32, "active")  # the partial index survived both rebuilds
     command.upgrade(config, "head")
     assert revision_of(database_url) == head_revision()
+
+
+# --- 0006_paypal_webhook_events ------------------------------------------------------------------
+
+M3_2_HEAD = "0005_payments"
+WEBHOOK_HEAD = "0006_paypal_webhook_events"
+EVENT = (
+    "INSERT INTO paypal_webhook_events (event_id, event_type, order_id, received_at, last_received_at) "
+    "VALUES (:event_id, 'PAYMENT.CAPTURE.COMPLETED', :order_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+)
+WEBHOOK_CHECKS = {
+    "ck_paypal_webhook_events_event_id_not_empty",
+    "ck_paypal_webhook_events_event_type_not_empty",
+    "ck_paypal_webhook_events_deliveries_positive",
+    "ck_paypal_webhook_events_outcome",
+    "ck_paypal_webhook_events_processed_has_outcome",
+}
+WEBHOOK_COLUMNS = {
+    # name: (nullable, has a server default); the integer primary key's own default (a PostgreSQL
+    # sequence, none on SQLite) isn't part of this contract and is checked by the drift test.
+    "id": (False, None),
+    "event_id": (False, False),
+    "event_type": (False, False),
+    "order_id": (True, False),
+    "outcome": (True, False),
+    "deliveries": (False, True),
+    "received_at": (False, False),
+    "last_received_at": (False, False),
+    "processed_at": (True, False),
+}
+# Everything a downgrade of 0006 must leave exactly as it was.
+M3_2_DATA = {
+    "orders": "SELECT id, public_ref, cart_id, reservation_id, status, version_hash, total_minor, paypal_order_id, "
+    "capture_attempt, review_reason FROM orders ORDER BY id",
+    "payments": "SELECT id, order_id, paypal_order_id, capture_id, status, verification, source FROM payments "
+    "ORDER BY id",
+    "reservations": "SELECT id, public_id, cart_id, status FROM reservations ORDER BY id",
+    "movements": "SELECT id, variant_id, delta_on_hand, delta_reserved, reason, reservation_id "
+    "FROM inventory_movements ORDER BY id",
+    "variants": "SELECT id, sku, stock_on_hand, stock_reserved FROM variants ORDER BY id",
+}
+INCONSISTENT_EVENTS = [
+    "INSERT INTO paypal_webhook_events (event_id, event_type, received_at, last_received_at) "
+    "VALUES ('', 'X', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    "INSERT INTO paypal_webhook_events (event_id, event_type, received_at, last_received_at) "
+    "VALUES ('WH-1', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    "INSERT INTO paypal_webhook_events (event_id, event_type, received_at, last_received_at) "
+    "VALUES (NULL, 'X', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    "INSERT INTO paypal_webhook_events (event_id, event_type, received_at) VALUES ('WH-1', 'X', CURRENT_TIMESTAMP)",
+    "INSERT INTO paypal_webhook_events (event_id, event_type, deliveries, received_at, last_received_at) "
+    "VALUES ('WH-1', 'X', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    "INSERT INTO paypal_webhook_events (event_id, event_type, outcome, received_at, last_received_at) "
+    "VALUES ('WH-1', 'X', 'refunded', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    # processed, but without an outcome
+    "INSERT INTO paypal_webhook_events (event_id, event_type, received_at, last_received_at, processed_at) "
+    "VALUES ('WH-1', 'X', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+]
+NOT_STORED = {
+    "body",
+    "payload",
+    "raw",
+    "resource",
+    "summary",
+    "signature",
+    "transmission_sig",
+    "transmission_id",
+    "cert_url",
+    "auth_algo",
+    "payer",
+    "email",
+    "amount",
+}
+
+
+def _m3_2_data(url: str) -> dict[str, list[tuple[object, ...]]]:
+    return {name: _rows(url, query) for name, query in M3_2_DATA.items()}
+
+
+def _m3_2_order_with_payment(url: str) -> None:
+    """An order with a PayPal order id and a payment row, written against the 0005 columns."""
+    _order_0004(url)
+    _execute(url, "UPDATE orders SET paypal_order_id = 'PP-1'")
+    _execute(url, PAYMENT)
+
+
+def _event(url: str, event_id: str, *, linked: bool) -> None:
+    order_id = _rows(url, "SELECT id FROM orders")[0][0] if linked else None
+    _execute(url, EVENT, {"event_id": event_id, "order_id": order_id})
+
+
+def _tables(url: str) -> set[str]:
+    engine = create_db_engine(url)
+    try:
+        return set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_to_0006_from_m3_2_keeps_orders_payments_and_stock(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, M3_2_HEAD)
+    _m3_2_order_with_payment(database_url)
+    before = _m3_2_data(database_url)
+    assert before["payments"]
+    assert before["orders"][0][7] == "PP-1"
+
+    command.upgrade(config, WEBHOOK_HEAD)
+
+    assert revision_of(database_url) == WEBHOOK_HEAD
+    assert _m3_2_data(database_url) == before
+    assert "paypal_webhook_events" in _tables(database_url)
+    assert _rows(database_url, "SELECT COUNT(*) FROM paypal_webhook_events") == [(0,)]
+
+
+def test_0006_schema_is_exactly_the_intended_one(database_url: str) -> None:
+    """Reflected from the database itself, so SQLite and PostgreSQL are held to the same shape."""
+    command.upgrade(alembic_config(database_url), "head")
+    engine = create_db_engine(database_url)
+    try:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]: (column["nullable"], None if column["name"] == "id" else column["default"] is not None)
+            for column in inspector.get_columns("paypal_webhook_events")
+        }
+        pk = inspector.get_pk_constraint("paypal_webhook_events")
+        uniques = {
+            (item["name"], tuple(item["column_names"]))
+            for item in inspector.get_unique_constraints("paypal_webhook_events")
+        }
+        indexes = {
+            (item["name"], tuple(item["column_names"]), bool(item["unique"]))
+            for item in inspector.get_indexes("paypal_webhook_events")
+            if item["name"] == "ix_paypal_webhook_events_order_id"
+        }
+        [foreign_key] = inspector.get_foreign_keys("paypal_webhook_events")
+        checks = {item["name"] for item in inspector.get_check_constraints("paypal_webhook_events")}
+    finally:
+        engine.dispose()
+    assert columns == WEBHOOK_COLUMNS
+    assert (pk["name"], pk["constrained_columns"]) == ("pk_paypal_webhook_events", ["id"])
+    assert uniques == {("uq_paypal_webhook_events_event_id", ("event_id",))}
+    assert indexes == {("ix_paypal_webhook_events_order_id", ("order_id",), False)}
+    assert (
+        foreign_key["name"],
+        foreign_key["referred_table"],
+        foreign_key["constrained_columns"],
+        foreign_key["referred_columns"],
+        (foreign_key["options"].get("ondelete") or "").upper(),
+    ) == ("fk_paypal_webhook_events_order_id_orders", "orders", ["order_id"], ["id"], "RESTRICT")
+    assert checks == WEBHOOK_CHECKS
+    assert set(columns).isdisjoint(NOT_STORED)  # no payload, signature, header, payer or amount columns
+
+
+def test_0006_event_ids_are_unique_and_the_order_is_optional(database_url: str) -> None:
+    command.upgrade(alembic_config(database_url), "head")
+    _m3_2_order_with_payment(database_url)
+    _event(database_url, "WH-1", linked=False)  # no Atlas order (unmatched): allowed
+    _event(database_url, "WH-2", linked=True)
+    rows = _rows(database_url, "SELECT event_id, order_id IS NULL, deliveries FROM paypal_webhook_events ORDER BY id")
+    assert rows == [("WH-1", True, 1), ("WH-2", False, 1)]  # deliveries defaults to 1 in the database
+    with pytest.raises(IntegrityError):
+        _event(database_url, "WH-1", linked=True)  # the same PayPal event, twice
+    with pytest.raises(IntegrityError):
+        _event(database_url, "WH-2", linked=False)
+    assert _rows(database_url, "SELECT COUNT(*) FROM paypal_webhook_events") == [(2,)]
+
+
+def test_0006_foreign_key_rejects_unknown_orders_and_restricts_deletion(database_url: str) -> None:
+    command.upgrade(alembic_config(database_url), "head")
+    _order_0004(database_url)  # an order without payments, so only the webhook FK can restrict it
+    with pytest.raises(IntegrityError):
+        _execute(database_url, EVENT, {"event_id": "WH-orphan", "order_id": 999999})
+    _event(database_url, "WH-1", linked=True)
+    with pytest.raises(IntegrityError):
+        _execute(database_url, "DELETE FROM orders")  # RESTRICT: webhook history isn't orphaned or lost
+    assert _rows(database_url, "SELECT COUNT(*) FROM orders") == [(1,)]
+    _execute(database_url, "DELETE FROM paypal_webhook_events")
+    _execute(database_url, "DELETE FROM orders")  # nothing else referred to it
+    assert _rows(database_url, "SELECT COUNT(*) FROM orders") == [(0,)]
+
+
+@pytest.mark.parametrize("statement", INCONSISTENT_EVENTS)
+def test_0006_constraints_reject_inconsistent_rows(database_url: str, statement: str) -> None:
+    command.upgrade(alembic_config(database_url), "head")
+    with pytest.raises(IntegrityError):
+        _execute(database_url, statement)
+
+
+def test_downgrade_0006_refuses_while_webhook_history_exists(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    _m3_2_order_with_payment(database_url)
+    _event(database_url, "WH-1", linked=False)
+    with pytest.raises(RuntimeError, match="webhook history"):
+        command.downgrade(config, M3_2_HEAD)
+    assert revision_of(database_url) == WEBHOOK_HEAD
+    assert _rows(database_url, "SELECT COUNT(*) FROM paypal_webhook_events") == [(1,)]
+
+
+def test_downgrade_0006_removes_only_the_webhook_table_then_upgrades_again(database_url: str) -> None:
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    _m3_2_order_with_payment(database_url)  # M3.2 payment history: 0006's downgrade must not touch it
+    before = _m3_2_data(database_url)
+    tables_before = _tables(database_url)
+
+    command.downgrade(config, M3_2_HEAD)
+
+    assert revision_of(database_url) == M3_2_HEAD
+    assert _tables(database_url) == tables_before - {"paypal_webhook_events"}
+    assert _m3_2_data(database_url) == before
+
+    command.upgrade(config, "head")  # and up again, over the same data
+    assert revision_of(database_url) == head_revision() == WEBHOOK_HEAD
+    assert _m3_2_data(database_url) == before
+    _event(database_url, "WH-1", linked=True)
+    assert _rows(database_url, "SELECT COUNT(*) FROM paypal_webhook_events") == [(1,)]
+
+
+def test_sqlite_0006_upgrade_and_downgrade_leave_foreign_keys_enforced(
+    sqlite_url: str, migration_fk_states: list[int]
+) -> None:
+    config = alembic_config(sqlite_url)
+    command.upgrade(config, M3_2_HEAD)
+    migration_fk_states.clear()
+
+    command.upgrade(config, WEBHOOK_HEAD)
+    command.downgrade(config, M3_2_HEAD)
+    command.upgrade(config, WEBHOOK_HEAD)
+
+    assert migration_fk_states, "no migration connection was checked in"
+    assert set(migration_fk_states) == {1}
+    with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+        _execute(sqlite_url, EVENT, {"event_id": "WH-orphan", "order_id": 999999})
